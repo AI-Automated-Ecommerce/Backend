@@ -57,11 +57,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             user_message = msg_body["text"]["body"]
             print(f"💬 User said: {user_message}")
             
-            # Generate AI response
-            ai_response = agent.generate_response(user_message, db, from_number)
-            print(f"🤖 AI response: {ai_response[:100]}...")
+            # Generate AI response with images
+            response_data = agent.generate_response_with_images(user_message, db, from_number)
+            ai_response = response_data["text"]
+            images = response_data.get("images", [])
             
-            # Send reply via Meta Graph API
+            print(f"🤖 AI response: {ai_response[:100]}...")
+            print(f"🖼️ Found {len(images)} images to send")
+            
+            # Send product images first (if any)
+            for img_data in images:
+                caption = f"📦 {img_data['product_name']} - ${img_data['price']:.2f}"
+                if img_data['stock'] > 0:
+                    caption += f" ({img_data['stock']} in stock)"
+                else:
+                    caption += " (Out of stock)"
+                send_image(from_number, img_data['image_url'], caption)
+            
+            # Then send the text reply
             send_reply(from_number, ai_response)
         
         return {"status": "processed"}
@@ -104,4 +117,44 @@ def send_reply(to_number: str, text_body: str):
             print(f"✅ Message sent successfully!")
     except Exception as e:
         print(f"❌ Error sending message: {e}")
+
+
+def send_image(to_number: str, image_url: str, caption: str = ""):
+    """
+    Send an image via WhatsApp using Meta Cloud API.
+    The image will be displayed directly in the chat, not as a link.
+    """
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        print("❌ Meta API Credentials missing in .env")
+        return False
+
+    url = f"https://graph.facebook.com/v21.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "image",
+        "image": {
+            "link": image_url,
+            "caption": caption
+        }
+    }
+    
+    print(f"🖼️ Sending image to {to_number}: {image_url}")
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers)
+        print(f"📬 Meta API Response: {res.status_code} - {res.text}")
+        if res.status_code not in [200, 201]:
+            print(f"❌ Failed to send image: {res.text}")
+            return False
+        else:
+            print(f"✅ Image sent successfully!")
+            return True
+    except Exception as e:
+        print(f"❌ Error sending image: {e}")
+        return False
 

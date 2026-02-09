@@ -54,6 +54,7 @@ class AIAgent:
         *   **Prices**: Always mention prices in USD ($).
         *   **Stock**: Check stock levels. If stock is 0, you CANNOT sell it.
         *   **Tone**: Professional, enthusiastic, and helpful. Use emojis like 📦, 💳, ✨ where appropriate.
+        *   **NO IMAGE URLs**: NEVER include image URLs or links in your text. Images are sent separately.
         *   **DO NOT be pushy**: When user asks about products, ONLY answer their question. 
             - Do NOT say "would you like to buy?" or "ready to order?" or "let me know when you want to proceed"
             - Simply provide the product info and stop. Let the user decide on their own.
@@ -167,6 +168,49 @@ class AIAgent:
         
         # Return top 5 most relevant products
         return [product for product, _ in scored_products[:5]]
+
+    def _get_product_images(self, query: str, db: Session) -> list:
+        """
+        Get images for products matching the query.
+        Returns list of dicts with product info and image URLs.
+        """
+        products = self._find_products(query, db)
+        images = []
+        
+        for product in products[:3]:  # Limit to 3 products to avoid spam
+            if product.imageUrl:
+                images.append({
+                    "product_id": product.id,
+                    "product_name": product.name,
+                    "price": float(product.price),
+                    "image_url": product.imageUrl,
+                    "stock": product.stockQuantity
+                })
+            # Also check ProductImage table for additional images
+            if hasattr(product, 'images') and product.images:
+                for img in product.images[:2]:  # Max 2 extra images per product
+                    if img.imageUrl and img.imageUrl != product.imageUrl:
+                        images.append({
+                            "product_id": product.id,
+                            "product_name": product.name,
+                            "price": float(product.price),
+                            "image_url": img.imageUrl,
+                            "stock": product.stockQuantity,
+                            "is_additional": True
+                        })
+        
+        return images
+
+    def _should_show_images(self, query: str) -> bool:
+        """
+        Detect if user is asking to see product images.
+        """
+        image_keywords = [
+            'show', 'image', 'picture', 'photo', 'look', 'see', 'view',
+            'what does', 'how does', 'looks like'
+        ]
+        query_lower = query.lower()
+        return any(kw in query_lower for kw in image_keywords)
 
     def _get_categories(self, db: Session) -> list:
         """
@@ -457,6 +501,31 @@ class AIAgent:
             
         except Exception as e:
             return f"Error connecting to AI service: {str(e)}"
+
+    def generate_response_with_images(self, user_query: str, db: Session, user_id: str) -> dict:
+        """
+        Generate AI response and include product images if user is asking about products.
+        Returns dict with 'text' and 'images' keys.
+        """
+        # Get the text response
+        text_response = self.generate_response(user_query, db, user_id)
+        
+        # Check if we should include images
+        images = []
+        if self._should_show_images(user_query):
+            images = self._get_product_images(user_query, db)
+        
+        # Also include images if user is asking about specific products
+        product_keywords = ['headphone', 'watch', 'keyboard', 'mouse', 'coffee', 'laptop']
+        query_lower = user_query.lower()
+        if any(kw in query_lower for kw in product_keywords):
+            if not images:  # Only if we haven't already fetched images
+                images = self._get_product_images(user_query, db)
+        
+        return {
+            "text": text_response,
+            "images": images
+        }
 
     def clear_history(self, user_id: str, clear_session: bool = True):
         """Clear conversation history and optionally session memory for a user."""
