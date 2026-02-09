@@ -48,20 +48,22 @@ class AIAgent:
         1.  **Product Knowledge**: Answer questions about products from the "Context Information" provided.
         2.  **Order Processing**: ONLY when user explicitly wants to buy/order, collect details and generate checkout links.
         3.  **Comparisons**: Compare products based on price, specs, and features.
+        4.  **Image Sharing**: When users ask for images/photos/pictures, the system AUTOMATICALLY sends product images. Just describe the product.
 
         STRICT RULES:
         *   **Context Only**: Do NOT hallucinate products. If it's not in the context, we don't sell it.
         *   **Prices**: Always mention prices in USD ($).
         *   **Stock**: Check stock levels. If stock is 0, you CANNOT sell it.
         *   **Tone**: Professional, enthusiastic, and helpful. Use emojis like 📦, 💳, ✨ where appropriate.
-        *   **NO IMAGE URLs**: NEVER include image URLs or links in your text. Images are sent separately.
+        *   **Images ARE SENT AUTOMATICALLY**: When user asks "show me", "can I see", "give images", etc., the system sends product images automatically. You should respond like "Here's the [Product Name]! It's..." and describe features. Do NOT say "I can't send images" - they ARE being sent.
+        *   **NO IMAGE URLs**: NEVER include image URLs or links in your text. Images are sent separately by the system.
         *   **DO NOT be pushy**: When user asks about products, ONLY answer their question. 
             - Do NOT say "would you like to buy?" or "ready to order?" or "let me know when you want to proceed"
             - Simply provide the product info and stop. Let the user decide on their own.
 
         ⚠️ CRITICAL: WHEN TO ASK FOR ORDER DETAILS ⚠️
-        - PRODUCT INQUIRY (e.g., "what headphones do you have?", "tell me about the watch", "show me products"):
-          → ONLY provide product info. End your response there. No sales pitch.
+        - PRODUCT INQUIRY (e.g., "what headphones do you have?", "tell me about the watch", "show me products", "give images"):
+          → ONLY provide product info. End your response there. No sales pitch. Images are sent automatically by the system.
         
         - ORDER INTENT (e.g., "I want to buy", "order 2 headphones", "I'll take it", "purchase", "place order"):
           → NOW ask for order details (name, address, phone, email)
@@ -207,10 +209,23 @@ class AIAgent:
         """
         image_keywords = [
             'show', 'image', 'picture', 'photo', 'look', 'see', 'view',
-            'what does', 'how does', 'looks like'
+            'what does', 'how does', 'looks like', 'give'
         ]
         query_lower = query.lower()
         return any(kw in query_lower for kw in image_keywords)
+
+    def _is_image_only_request(self, query: str) -> bool:
+        """
+        Detect if user is ONLY asking for images (not ordering).
+        """
+        query_lower = query.lower()
+        image_words = ['image', 'photo', 'picture', 'show', 'see', 'view', 'look', 'give']
+        order_words = ['buy', 'order', 'purchase', 'get it', 'take it', 'want it']
+        
+        has_image_intent = any(word in query_lower for word in image_words)
+        has_order_intent = any(word in query_lower for word in order_words)
+        
+        return has_image_intent and not has_order_intent
 
     def _get_categories(self, db: Session) -> list:
         """
@@ -459,12 +474,22 @@ class AIAgent:
         # Get conversation history
         user_history = self.conversation_history.get(user_id, [])
         
+        # Check if this is an image-only request (not an order)
+        is_image_request = self._is_image_only_request(user_query)
+        
         # Build messages for AI
         messages = [{"role": "system", "content": self.system_prompt}]
         messages.extend(user_history[-10:])  # Last 10 messages for context
+        
+        # Add special instruction for image-only requests
+        user_content = f"SESSION STATE (VERY IMPORTANT - Use this info, do NOT re-ask for collected data):\n{session_state}\n\nContext Information:\n{context}\n\nUser Question: {user_query}"
+        
+        if is_image_request:
+            user_content += "\n\n⚠️ USER IS ONLY ASKING FOR IMAGES, NOT ORDERING. Just describe the product. Do NOT ask for order details."
+        
         messages.append({
             "role": "user",
-            "content": f"SESSION STATE (VERY IMPORTANT - Use this info, do NOT re-ask for collected data):\n{session_state}\n\nContext Information:\n{context}\n\nUser Question: {user_query}"
+            "content": user_content
         })
 
         try:
