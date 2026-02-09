@@ -33,6 +33,9 @@ class AIAgent:
         # In-memory conversation history: {user_id: [{role, content}, ...]}
         self.conversation_history = {}
         
+        # Structured session memory for order details: {user_id: {name, address, phone, email, product_id, product_name, quantity}}
+        self.session_memory = {}
+        
         # Path to save chat logs for fine-tuning
         self.log_file = "chat_logs.json"
         
@@ -40,6 +43,12 @@ class AIAgent:
         self.system_prompt = """
         You are an elite, intelligent Sales Assistant for an e-commerce store.
         Your goal is to provide accurate, helpful, and detailed product information and guide users through a smooth ordering process.
+
+        ⚠️ CRITICAL: SESSION STATE MANAGEMENT ⚠️
+        You will receive a "SESSION STATE" section showing what user details have ALREADY been collected.
+        - NEVER ask for information that is listed under "ALREADY COLLECTED"
+        - ONLY ask for items listed under "STILL NEEDED"
+        - If all details are collected, proceed directly to generate the checkout link
 
         CAPABILITIES:
         1.  **Product Knowledge**: valid ONLY from the "Context Information" provided.
@@ -52,59 +61,12 @@ class AIAgent:
         *   **Stock**: Check stock levels. If stock is 0, you CANNOT sell it.
         *   **Tone**: Professional, enthusiastic, and helpful. Use emojis like 📦, 💳, ✨ where appropriate.
 
-        ORDER PLACEMENT PROTOCOL (Follow this Step-by-Step):
-        Phase 1: Intent Detection
-        If the user wants to buy/order, identify:
-        - Product ID & Name
-        - Quantity (default to 1 if not specified)
-
-        Phase 2: Stock Check
-        - If Stock > 0: Proceed.
-        - If Stock = 0: Apologize and offer alternatives.
-
-        Phase 3: Detail Collection (Iterative)
-        You must collect the following 4 pieces of information. Do not generate the link until you have ALL of them:
-        1.  Customer Name
-        2.  Shipping Address
-        3.  Phone Number
-        4.  Email Address
-
-        *If the user provides some info, ask for the rest. Do not overwhelm the user, you can ask for one or two things at a time or all at once if the flow is natural.*
-        *CRITICAL: If the user provides ALL details in a single message, do NOT ask for them again. Proceed immediately to Phase 4.*
-
-        Phase 4: Confirmation & Link Generation
-        Once you have (Product, Qty, Name, Address, Phone, Email):
-        1.  Summarize the order.
-        2.  Generate the checkout link exactly in this format using Markdown:
-            [Click here to Complete Your Order for {{Product Name}}]({self.frontend_url}/checkout?productId={{ID}}&quantity={{Qty}}&name={{Name}}&address={{Address}}&phone={{Phone}}&email={{Email}})
-
-        EXAMPLES:
-        
-        User: "I want the wireless headphones"
-        AI: "Great choice! The Wireless Headphones are $99.99. To place the order, I just need a few details. What is your full name?"
-
-        User: "John Doe"
-        AI: "Thanks, John! Where should we ship these headphones?"
-
-        User: "123 Main St, New York"
-        AI: "Got it. I also need your phone number and email address for the receipt."
-
-        User: "555-0100, john@example.com"
-        AI: "Perfect! I've prepared your order:
-        - Item: Wireless Headphones (x1)
-        - Price: $99.99
-        - Shipping to: John Doe, 123 Main St, New York
-        - Contact: 555-0100, john@example.com
-        
-        [Click here to Complete Your Order for Wireless Headphones]({self.frontend_url}/checkout?productId=1&quantity=1&name=John%20Doe&address=123%20Main%20St,%20New%20York&phone=555-0100&email=john%40example.com)"
-
-        User: "place order 5 headphones. name WImukthi madushan, address 37, atubedniyawa, lendora, contact number 0264874673 email wimukthi@gmail.com"
-        AI: "I've verified we have 5 Wireless Headphones in stock. Since you provided all your details, your order is ready!
-        
-        [Click here to Complete Your Order for Wireless Headphones]({self.frontend_url}/checkout?productId=1&quantity=5&name=WImukthi%20madushan&address=37,%20atubedniyawa,%20lendora&phone=0264874673&email=wimukthi@gmail.com)"
-
-        User: "Do you have any gaming laptops?"
-        AI: (Checks Context) "I'm sorry, I don't see any gaming laptops in our current inventory. However, we do have a Mechanical Keyboard and Gaming Mouse provided in the list above. Would you like to know more about those?"
+        ORDER PLACEMENT PROTOCOL:
+        1. Identify Product and Quantity from user message
+        2. Check Stock (if 0, apologize and suggest alternatives)
+        3. Collect ONLY the MISSING details from "SESSION STATE" - Do NOT re-ask for collected ones!
+        4. Once ALL details are present, generate checkout link:
+           [Click here to Complete Your Order]({self.frontend_url}/checkout?productId={{ID}}&quantity={{Qty}}&name={{Name}}&address={{Address}}&phone={{Phone}}&email={{Email}})
         """
 
     def _clean_text(self, text: str) -> str:
@@ -295,6 +257,87 @@ class AIAgent:
         except Exception as e:
             print(f"Failed to log conversation: {e}")
 
+    def _get_session(self, user_id: str) -> dict:
+        """Get or initialize session memory for a user."""
+        if user_id not in self.session_memory:
+            self.session_memory[user_id] = {
+                "name": None,
+                "address": None,
+                "phone": None,
+                "email": None,
+                "product_id": None,
+                "product_name": None,
+                "quantity": 1
+            }
+        return self.session_memory[user_id]
+
+    def _extract_details(self, text: str, session: dict) -> dict:
+        """
+        Extract user details from message and update session.
+        Uses regex patterns to identify name, email, phone, address.
+        """
+        text_lower = text.lower()
+        
+        # Extract email (most reliable pattern)
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+        if email_match:
+            session["email"] = email_match.group()
+        
+        # Extract phone number (various formats)
+        phone_match = re.search(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}', text)
+        if phone_match:
+            session["phone"] = phone_match.group().strip()
+        
+        # Extract name patterns like "name is X", "I'm X", "my name X"
+        name_patterns = [
+            r"(?:my name is|name is|i'm|i am|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+            r"name[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
+        ]
+        for pattern in name_patterns:
+            name_match = re.search(pattern, text, re.IGNORECASE)
+            if name_match:
+                session["name"] = name_match.group(1).strip()
+                break
+        
+        # Extract address patterns
+        address_patterns = [
+            r"(?:address is|address[:\s]+|ship to|shipping address[:\s]+)(.+?)(?:,\s*(?:phone|email|contact)|$)",
+            r"(?:deliver to|delivery address[:\s]+)(.+?)(?:,\s*(?:phone|email|contact)|$)"
+        ]
+        for pattern in address_patterns:
+            addr_match = re.search(pattern, text, re.IGNORECASE)
+            if addr_match:
+                addr = addr_match.group(1).strip()
+                # Clean up the address
+                addr = re.sub(r'\s*(phone|email|contact).*$', '', addr, flags=re.IGNORECASE)
+                if len(addr) > 5:  # Minimum reasonable address length
+                    session["address"] = addr
+                break
+        
+        return session
+
+    def _get_session_state_prompt(self, session: dict) -> str:
+        """Generate a prompt snippet describing current session state."""
+        collected = []
+        missing = []
+        
+        if session.get("product_name"):
+            collected.append(f"Product: {session['product_name']} (ID: {session['product_id']}) x{session['quantity']}")
+        
+        for field in ["name", "address", "phone", "email"]:
+            if session.get(field):
+                collected.append(f"{field.title()}: {session[field]}")
+            else:
+                missing.append(field.title())
+        
+        state = ""
+        if collected:
+            state += "ALREADY COLLECTED FROM USER (Do NOT ask again):\n- " + "\n- ".join(collected) + "\n\n"
+        if missing:
+            state += "STILL NEEDED (Ask for these):\n- " + ", ".join(missing) + "\n"
+        
+        return state
+
     def generate_response(self, user_query: str, db: Session, user_id: str) -> str:
         """
         Generate AI response to user query.
@@ -305,12 +348,34 @@ class AIAgent:
         if not self._validate_query(user_query):
             return "I can only help you with product information and availability. I cannot access order history, user data, or payment information."
         
+        # Get or initialize session memory
+        session = self._get_session(user_id)
+        
+        # Extract any user details from current message
+        self._extract_details(user_query, session)
+        
+        # Check if user mentions a product and update session
+        relevant_products = self._find_products(user_query, db)
+        if relevant_products and not session.get("product_name"):
+            # Auto-select the first matching product
+            product = relevant_products[0]
+            session["product_id"] = product.id
+            session["product_name"] = product.name
+        
+        # Extract quantity if mentioned
+        qty_match = re.search(r'(\d+)\s*(?:headphones?|watch(?:es)?|keyboard|mouse|coffee|units?|pieces?|items?)', user_query, re.IGNORECASE)
+        if qty_match:
+            session["quantity"] = int(qty_match.group(1))
+        
         # Get product context
         context = self.get_product_context(user_query, db, user_id)
         
+        # Get session state for prompt injection
+        session_state = self._get_session_state_prompt(session)
+        
         # Fallback if no Groq API key
         if not self.client:
-            return f"[MOCK AI] Asked: '{user_query}'.\n\nFound:\n{context}\n\n(Set GROQ_API_KEY in .env for real AI responses)"
+            return f"[MOCK AI] Asked: '{user_query}'.\n\nFound:\n{context}\n\nSession: {session}\n\n(Set GROQ_API_KEY in .env for real AI responses)"
 
         # Get conversation history
         user_history = self.conversation_history.get(user_id, [])
@@ -320,7 +385,7 @@ class AIAgent:
         messages.extend(user_history[-10:])  # Last 10 messages for context
         messages.append({
             "role": "user",
-            "content": f"Context Information:\n{context}\n\nUser Question: {user_query}"
+            "content": f"SESSION STATE (VERY IMPORTANT - Use this info, do NOT re-ask for collected data):\n{session_state}\n\nContext Information:\n{context}\n\nUser Question: {user_query}"
         })
 
         try:
@@ -358,10 +423,12 @@ class AIAgent:
         except Exception as e:
             return f"Error connecting to AI service: {str(e)}"
 
-    def clear_history(self, user_id: str):
-        """Clear conversation history for a specific user."""
+    def clear_history(self, user_id: str, clear_session: bool = True):
+        """Clear conversation history and optionally session memory for a user."""
         if user_id in self.conversation_history:
             del self.conversation_history[user_id]
+        if clear_session and user_id in self.session_memory:
+            del self.session_memory[user_id]
 
 
 # Singleton instance
