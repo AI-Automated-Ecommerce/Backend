@@ -33,30 +33,28 @@ class AIAgent:
         self.system_prompt = """
         You are an intelligent Sales Assistant for an e-commerce store.
         
-        Your Role:
-        - Help customers find products
-        - Compare product options
-        - Check product availability and stock
-        - Provide price information
-        - Answer questions about product features
-        - Assist with placing orders by generating checkout links
+        Your Goals:
+        1. Help users explore products (features, price, stock).
+        2. Facilitate order placement by collecting necessary details.
+        3. Generate a checkout link ONLY when all details are verified.
+        
+        Order Placement Process:
+        If the user indicates they want to buy something (e.g., "place order", "buy this"):
+        1. Identify the Product ID and Quantity.
+        2. Check Stock: If stock is 0, apologize and refuse.
+        3. Collect Missing Details: You MUST ask for the following if not provided:
+           - Customer Name
+           - Shipping Address
+           - Phone Number
+        4. Confirm: Summarize the order (Product, Qty, Price, Name, Address) and ask for confirmation.
+        5. Generate Link: Only after confirmation, provide the link:
+           [Click here to Order {Product Name}](http://localhost:8080/checkout?productId={ID}&quantity={Qty}&name={Name}&address={Address}&phone={Phone})
         
         Strict Guidelines:
-        1. ONLY use information from the "Context Information" provided
-        2. NEVER invent or make up products that aren't in the context
-        3. ALWAYS include the price when mentioning a product
-        4. If a product isn't in stock, clearly state it
-        5. Be concise, friendly, and helpful
-        6. Use bullet points when listing multiple items
-        7. If context is empty, ask the user for more details
-        8. If the user wants to place an order, YOU MUST:
-           - Identify the product ID and quantity from the users request.
-           - Check "Context Information" for stock status. IF STOCK IS 0, refuse the order politely.
-           - If product ID is found and in stock, PROVIDE a checkout link in this format: 
-             [Click here to Order {Product Name}](http://localhost:5173/checkout?productId={ID}&quantity={Qty})
-           - If Product ID is NOT found or ambiguous, ask for clarification.
-        
-        Remember: You can help with product information, availability, and starting the checkout process.
+        - NEVER invent products. Use "Context Information" only.
+        - If "Context Information" is empty or product missing, ask clarifying questions.
+        - Be friendly, professional, and concise.
+        - Use emojis effectively 📦 ✅ 💳.
         """
 
     def _clean_text(self, text: str) -> str:
@@ -71,8 +69,8 @@ class AIAgent:
         query_lower = query.lower()
         
         # Blocked keywords that might indicate attempts to access restricted data
+        # RELAXED for order taking: allowed 'address', 'card', 'user', 'customer'
         blocked_keywords = [
-            'user', 'customer', 'card', 'address', # removed 'order', 'payment'
             'password', 'admin', 'delete', 'update',
             'insert', 'drop', 'table', 'database', 'sql'
         ]
@@ -264,3 +262,48 @@ class AIAgent:
 
 # Singleton instance
 agent = AIAgent()
+
+
+if __name__ == "__main__":
+    import sys
+    import os
+    
+    # Add the project root to sys.path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "../.."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    
+    from app.core.database import SessionLocal
+    
+    # Interactive CLI
+    print("="*60)
+    print("🤖 Smart Sales Agent (Interactive Debug Mode)")
+    print("Type 'exit' or 'quit' to stop.")
+    print("="*60)
+    
+    db = SessionLocal()
+    user_id = "debug_user"
+    
+    # Pre-seed history to test flow if needed, or start fresh
+    agent.clear_history(user_id)
+    
+    try:
+        while True:
+            try:
+                user_input = input("\nYou: ").strip()
+                if not user_input:
+                    continue
+                if user_input.lower() in ['quit', 'exit']:
+                    print("Goodbye!")
+                    break
+                    
+                response = agent.generate_response(user_input, db, user_id)
+                print(f"AI:  {response}")
+            except KeyboardInterrupt:
+                print("\nGoodbye!")
+                break
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        db.close()
