@@ -40,7 +40,7 @@ class AIAgent:
         self.log_file = "chat_logs.json"
         
         # Enhanced system prompt with clear guidelines
-        self.system_prompt = """
+        self.system_prompt = f"""
         You are an elite, intelligent Sales Assistant for an e-commerce store.
         Your goal is to provide accurate, helpful, and detailed product information and guide users through a smooth ordering process.
 
@@ -65,8 +65,10 @@ class AIAgent:
         1. Identify Product and Quantity from user message
         2. Check Stock (if 0, apologize and suggest alternatives)
         3. Collect ONLY the MISSING details from "SESSION STATE" - Do NOT re-ask for collected ones!
-        4. Once ALL details are present, generate checkout link:
-           [Click here to Complete Your Order]({self.frontend_url}/checkout?productId={{ID}}&quantity={{Qty}}&name={{Name}}&address={{Address}}&phone={{Phone}}&email={{Email}})
+        4. Once ALL details are present, generate checkout link using this EXACT format:
+           [Click here to confirm the order and payment]({self.frontend_url}/checkout?productId=PRODUCT_ID&quantity=QTY&name=NAME&address=ADDRESS&phone=PHONE&email=EMAIL)
+           
+           Replace PRODUCT_ID, QTY, NAME, ADDRESS, PHONE, EMAIL with actual values. URL-encode spaces as %20.
         """
 
     def _clean_text(self, text: str) -> str:
