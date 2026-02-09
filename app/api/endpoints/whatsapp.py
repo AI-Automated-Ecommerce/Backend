@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 from fastapi import APIRouter, Depends, Request, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -66,13 +67,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             print(f"🖼️ Found {len(images)} images to send")
             
             # Send product images first (if any)
-            for img_data in images:
-                caption = f"📦 {img_data['product_name']} - ${img_data['price']:.2f}"
-                if img_data['stock'] > 0:
-                    caption += f" ({img_data['stock']} in stock)"
-                else:
-                    caption += " (Out of stock)"
-                send_image(from_number, img_data['image_url'], caption)
+            if images:
+                print(f"📸 Attempting to send {len(images)} images...")
+                for i, img_data in enumerate(images):
+                    print(f"  Image {i+1}: {img_data['product_name']} - {img_data['image_url']}")
+                    caption = f"📦 {img_data['product_name']} - ${img_data['price']:.2f}"
+                    if img_data['stock'] > 0:
+                        caption += f" ({img_data['stock']} in stock)"
+                    else:
+                        caption += " (Out of stock)"
+                    
+                    success = send_image(from_number, img_data['image_url'], caption)
+                    print(f"  → Image {i+1} send result: {success}")
+                    time.sleep(0.5)  # Small delay between images
+                
+                # Delay before sending text to avoid rate limiting
+                time.sleep(1)
+            else:
+                print("⚠️ No images to send")
             
             # Then send the text reply
             send_reply(from_number, ai_response)
