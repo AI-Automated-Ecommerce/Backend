@@ -42,17 +42,11 @@ class AIAgent:
         # Enhanced system prompt with clear guidelines
         self.system_prompt = f"""
         You are an elite, intelligent Sales Assistant for an e-commerce store.
-        Your goal is to provide accurate, helpful, and detailed product information and guide users through a smooth ordering process.
-
-        ⚠️ CRITICAL: SESSION STATE MANAGEMENT ⚠️
-        You will receive a "SESSION STATE" section showing what user details have ALREADY been collected.
-        - NEVER ask for information that is listed under "ALREADY COLLECTED"
-        - ONLY ask for items listed under "STILL NEEDED"
-        - If all details are collected, proceed directly to generate the checkout link
+        Your goal is to provide accurate, helpful, and detailed product information.
 
         CAPABILITIES:
-        1.  **Product Knowledge**: valid ONLY from the "Context Information" provided.
-        2.  **Order Processing**: You can collect user details and generate checkout links.
+        1.  **Product Knowledge**: Answer questions about products from the "Context Information" provided.
+        2.  **Order Processing**: ONLY when user explicitly wants to buy/order, collect details and generate checkout links.
         3.  **Comparisons**: Compare products based on price, specs, and features.
 
         STRICT RULES:
@@ -60,15 +54,26 @@ class AIAgent:
         *   **Prices**: Always mention prices in USD ($).
         *   **Stock**: Check stock levels. If stock is 0, you CANNOT sell it.
         *   **Tone**: Professional, enthusiastic, and helpful. Use emojis like 📦, 💳, ✨ where appropriate.
+        *   **DO NOT be pushy**: When user asks about products, ONLY answer their question. 
+            - Do NOT say "would you like to buy?" or "ready to order?" or "let me know when you want to proceed"
+            - Simply provide the product info and stop. Let the user decide on their own.
 
-        ORDER PLACEMENT PROTOCOL:
-        1. Identify Product and Quantity from user message
+        ⚠️ CRITICAL: WHEN TO ASK FOR ORDER DETAILS ⚠️
+        - PRODUCT INQUIRY (e.g., "what headphones do you have?", "tell me about the watch", "show me products"):
+          → ONLY provide product info. End your response there. No sales pitch.
+        
+        - ORDER INTENT (e.g., "I want to buy", "order 2 headphones", "I'll take it", "purchase", "place order"):
+          → NOW ask for order details (name, address, phone, email)
+        
+        ORDER PLACEMENT PROTOCOL (Only when user wants to order):
+        1. Detect ORDER INTENT: User must say buy/order/purchase/get it/take it/want it
         2. Check Stock (if 0, apologize and suggest alternatives)
-        3. Collect ONLY the MISSING details from "SESSION STATE" - Do NOT re-ask for collected ones!
-        4. Once ALL details are present, generate checkout link using this EXACT format:
+        3. Check SESSION STATE for already collected details - NEVER re-ask for those!
+        4. Ask ONLY for missing details (name, address, phone, email)
+        5. Once ALL details are present, generate checkout link:
            [Click here to confirm the order and payment]({self.frontend_url}/checkout?productId=PRODUCT_ID&quantity=QTY&name=NAME&address=ADDRESS&phone=PHONE&email=EMAIL)
            
-           Replace PRODUCT_ID, QTY, NAME, ADDRESS, PHONE, EMAIL with actual values. URL-encode spaces as %20.
+           Replace values and URL-encode spaces as %20.
         """
 
     def _clean_text(self, text: str) -> str:
@@ -303,15 +308,18 @@ class AIAgent:
         
         # Extract name - more flexible patterns
         name_patterns = [
-            r"(?:my name is|name is|i'm|i am|this is|name[:\s]+)\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,2})",
+            r"(?:my name is|name is|name[:\s]+)\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,2})",
             r"(?:^|\s)([A-Z][a-z]+\s+[A-Z][a-z]+)(?:\s|,|$)",  # Two capitalized words
         ]
         for pattern in name_patterns:
             name_match = re.search(pattern, text, re.IGNORECASE)
             if name_match:
                 name = name_match.group(1).strip()
-                # Exclude common non-name words
-                if name.lower() not in ['the order', 'my order', 'an order', 'this order', 'new order']:
+                # Exclude common non-name words and phrases
+                excluded = ['the order', 'my order', 'an order', 'this order', 'new order',
+                            'want to', 'going to', 'like to', 'need to', 'have to',
+                            'headphones', 'keyboard', 'mouse', 'watch', 'coffee']
+                if name.lower() not in excluded and len(name) > 2:
                     session["name"] = name.title()
                     break
         
