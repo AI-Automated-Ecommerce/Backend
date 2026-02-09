@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import datetime
 from sqlalchemy.orm import Session
 from app.models.models import Product, Category
 from groq import Groq
@@ -30,6 +32,9 @@ class AIAgent:
         
         # In-memory conversation history: {user_id: [{role, content}, ...]}
         self.conversation_history = {}
+        
+        # Path to save chat logs for fine-tuning
+        self.log_file = "chat_logs.json"
         
         # Enhanced system prompt with clear guidelines
         self.system_prompt = """
@@ -65,6 +70,7 @@ class AIAgent:
         4.  Email Address
 
         *If the user provides some info, ask for the rest. Do not overwhelm the user, you can ask for one or two things at a time or all at once if the flow is natural.*
+        *CRITICAL: If the user provides ALL details in a single message, do NOT ask for them again. Proceed immediately to Phase 4.*
 
         Phase 4: Confirmation & Link Generation
         Once you have (Product, Qty, Name, Address, Phone, Email):
@@ -91,6 +97,11 @@ class AIAgent:
         - Contact: 555-0100, john@example.com
         
         [Click here to Complete Your Order for Wireless Headphones]({self.frontend_url}/checkout?productId=1&quantity=1&name=John%20Doe&address=123%20Main%20St,%20New%20York&phone=555-0100&email=john%40example.com)"
+
+        User: "place order 5 headphones. name WImukthi madushan, address 37, atubedniyawa, lendora, contact number 0264874673 email wimukthi@gmail.com"
+        AI: "I've verified we have 5 Wireless Headphones in stock. Since you provided all your details, your order is ready!
+        
+        [Click here to Complete Your Order for Wireless Headphones]({self.frontend_url}/checkout?productId=1&quantity=5&name=WImukthi%20madushan&address=37,%20atubedniyawa,%20lendora&phone=0264874673&email=wimukthi@gmail.com)"
 
         User: "Do you have any gaming laptops?"
         AI: (Checks Context) "I'm sorry, I don't see any gaming laptops in our current inventory. However, we do have a Mechanical Keyboard and Gaming Mouse provided in the list above. Would you like to know more about those?"
@@ -136,13 +147,20 @@ class AIAgent:
             return []
 
         # Check for generic queries
+        # Improved generic detection to catch typos like "avaibale" or variations
         is_generic = any(phrase in cleaned_query for phrase in [
             "what do you have",
             "what do you sell",
             "show me everything",
             "all products",
-            "what products"
+            "what products",
+            "list products",
+            "available"
         ])
+        
+        # Also treat as generic if the user just asks "products?" or "items?"
+        if len(query_words) < 2 and any(w in ["products", "items", "catalog", "stock"] for w in query_words):
+            is_generic = True
         
         # SECURITY: Only query Product table with isActive filter
         products_query = db.query(Product).filter(Product.isActive == True)
@@ -203,19 +221,30 @@ class AIAgent:
         relevant_products = self._find_products(query, db)
         
         # Check conversation history for follow-up context
+        # If the user is providing details (which won't match a product), we MUST recover the previous product context.
         if not relevant_products and user_id and user_id in self.conversation_history:
             history = self.conversation_history[user_id]
-            last_user_msg = next(
-                (msg['content'] for msg in reversed(history) if msg['role'] == 'user'),
-                None
-            )
             
-            # Detect follow-up questions
-            follow_up_triggers = ["it", "them", "that", "price", "cost", "much", "stock", "available"]
-            if last_user_msg and any(trigger in query.lower() for trigger in follow_up_triggers):
-                relevant_products = self._find_products(last_user_msg, db)
+            # Look back at the last 3 user messages to find what we were talking about
+            # This is critical for flow retention (e.g., User says "My name is John" after "I want a headset")
+            recent_user_msgs = [msg['content'] for msg in reversed(history) if msg['role'] == 'user'][:3]
+            
+            for past_msg in recent_user_msgs:
+                # Try to find products in previous messages
+                found_products = self._find_products(past_msg, db)
+                if found_products:
+                    relevant_products = found_products
+                    break
 
         if not relevant_products:
+            # Check if it looks like the user is providing order details (email, phone, address fragments)
+            # and soften the "No products found" message so the AI doesn't hallucinate.
+            is_providing_info = any(
+                x in query.lower() for x in ['@', 'road', 'st', 'ave', 'lane', '07', 'number', 'name', 'address']
+            )
+            if is_providing_info:
+                 return "User is providing order details. No specific products mentioned in this immediate query, but proceed with the existing order context."
+            
             return "No products found matching that description. Try asking about specific product types or categories!"
         
         # Build context with product information
@@ -232,6 +261,39 @@ class AIAgent:
                 )
         
         return "Here are the products we have available:\n" + "\n".join(context_lines)
+
+    def _log_interaction(self, user_id: str, user_query: str, context: str, ai_response: str):
+        """
+        Log the interaction to a JSON file for future fine-tuning.
+        Structure matches common fine-tuning datasets (instruction, input, output).
+        """
+        log_entry = {
+            "timestamp":  datetime.datetime.now().isoformat(),
+            "user_id": user_id,
+            "instruction": self.system_prompt,
+            "input": f"Context:\n{context}\n\nUser: {user_query}",
+            "output": ai_response
+        }
+        
+        try:
+            # Read existing logs or create new list
+            if os.path.exists(self.log_file):
+                with open(self.log_file, 'r', encoding='utf-8') as f:
+                    try:
+                        logs = json.load(f)
+                    except json.JSONDecodeError:
+                        logs = []
+            else:
+                logs = []
+            
+            logs.append(log_entry)
+            
+            # Write back to file
+            with open(self.log_file, 'w', encoding='utf-8') as f:
+                json.dump(logs, f, ensure_ascii=False, indent=2)
+                
+        except Exception as e:
+            print(f"Failed to log conversation: {e}")
 
     def generate_response(self, user_query: str, db: Session, user_id: str) -> str:
         """
@@ -287,6 +349,9 @@ class AIAgent:
             # Limit history to last 20 messages (10 exchanges)
             if len(self.conversation_history[user_id]) > 20:
                 self.conversation_history[user_id] = self.conversation_history[user_id][-20:]
+            
+            # Log this interaction for future fine-tuning
+            self._log_interaction(user_id, user_query, context, ai_response)
             
             return ai_response
             
