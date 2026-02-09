@@ -34,26 +34,32 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     """
     try:
         data = await request.json()
+        print(f"📩 Received webhook data: {data}")
         
         # Check if it's a valid message object
-        entry = data.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
+        entry = data.get("entry", [])[0] if data.get("entry") else {}
+        changes = entry.get("changes", [])[0] if entry.get("changes") else {}
         value = changes.get("value", {})
         messages = value.get("messages", [])
 
         if not messages:
+            print("⚠️ No messages in payload (might be a status update)")
             return {"status": "ignored", "reason": "no messages"}
 
         msg_body = messages[0]
         from_number = msg_body.get("from")  # User's phone number
         msg_type = msg_body.get("type")
+        
+        print(f"📱 Message from: {from_number}, Type: {msg_type}")
 
         # We only support text messages for now
         if msg_type == "text":
             user_message = msg_body["text"]["body"]
+            print(f"💬 User said: {user_message}")
             
             # Generate AI response
             ai_response = agent.generate_response(user_message, db, from_number)
+            print(f"🤖 AI response: {ai_response[:100]}...")
             
             # Send reply via Meta Graph API
             send_reply(from_number, ai_response)
@@ -61,7 +67,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         return {"status": "processed"}
 
     except Exception as e:
-        print(f"Error in WhatsApp webhook: {e}")
+        print(f"❌ Error in WhatsApp webhook: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 
@@ -78,17 +86,22 @@ def send_reply(to_number: str, text_body: str):
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
-    dates = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": to_number,
         "type": "text",
         "text": {"body": text_body}
     }
     
+    print(f"📤 Sending to {to_number}: {text_body[:50]}...")
+    
     try:
-        res = requests.post(url, json=dates, headers=headers)
+        res = requests.post(url, json=payload, headers=headers)
+        print(f"📬 Meta API Response: {res.status_code} - {res.text}")
         if res.status_code not in [200, 201]:
             print(f"❌ Failed to send WhatsApp message: {res.text}")
+        else:
+            print(f"✅ Message sent successfully!")
     except Exception as e:
         print(f"❌ Error sending message: {e}")
 
