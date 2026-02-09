@@ -493,12 +493,12 @@ class AIAgent:
         })
 
         try:
-            # Call Groq API with llama-3.3-70b
+            # Call Groq API with llama-3.1-8b-instant (faster, lower token usage)
             chat_completion = self.client.chat.completions.create(
                 messages=messages,
-                model="llama-3.3-70b-versatile",
+                model="llama-3.1-8b-instant",
                 temperature=0.7,
-                max_tokens=1024
+                max_tokens=512  # Reduced to save tokens
             )
             ai_response = chat_completion.choices[0].message.content
             
