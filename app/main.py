@@ -57,6 +57,8 @@ origins = [
     "http://localhost:8080",
     "http://localhost:8081",
     "http://localhost:5173", # Vite default
+    "https://frontend-0bfs.onrender.com",
+    "https://frontend-0bfs.onrender.com/",
 ]
 
 app.add_middleware(

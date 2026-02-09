@@ -19,6 +19,8 @@ class AIAgent:
     def __init__(self):
         """Initialize the AI agent with Groq API and conversation history."""
         api_key = os.environ.get("GROQ_API_KEY")
+        self.frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+        
         self.client = None
         if api_key and api_key.startswith("gsk_"):
             try:
@@ -68,7 +70,7 @@ class AIAgent:
         Once you have (Product, Qty, Name, Address, Phone, Email):
         1.  Summarize the order.
         2.  Generate the checkout link exactly in this format using Markdown:
-            [Click here to Complete Your Order for {Product Name}](http://localhost:5173/checkout?productId={ID}&quantity={Qty}&name={Name}&address={Address}&phone={Phone}&email={Email})
+            [Click here to Complete Your Order for {{Product Name}}]({self.frontend_url}/checkout?productId={{ID}}&quantity={{Qty}}&name={{Name}}&address={{Address}}&phone={{Phone}}&email={{Email}})
 
         EXAMPLES:
         
@@ -88,7 +90,7 @@ class AIAgent:
         - Shipping to: John Doe, 123 Main St, New York
         - Contact: 555-0100, john@example.com
         
-        [Click here to Complete Your Order for Wireless Headphones](http://localhost:5173/checkout?productId=1&quantity=1&name=John%20Doe&address=123%20Main%20St,%20New%20York&phone=555-0100&email=john@example.com)"
+        [Click here to Complete Your Order for Wireless Headphones]({self.frontend_url}/checkout?productId=1&quantity=1&name=John%20Doe&address=123%20Main%20St,%20New%20York&phone=555-0100&email=john%40example.com)"
 
         User: "Do you have any gaming laptops?"
         AI: (Checks Context) "I'm sorry, I don't see any gaming laptops in our current inventory. However, we do have a Mechanical Keyboard and Gaming Mouse provided in the list above. Would you like to know more about those?"
