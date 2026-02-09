@@ -276,7 +276,7 @@ class AIAgent:
     def _extract_details(self, text: str, session: dict) -> dict:
         """
         Extract user details from message and update session.
-        Uses regex patterns to identify name, email, phone, address.
+        More flexible extraction that works with various input formats.
         """
         text_lower = text.lower()
         
@@ -285,36 +285,61 @@ class AIAgent:
         if email_match:
             session["email"] = email_match.group()
         
-        # Extract phone number (various formats)
-        phone_match = re.search(r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}', text)
-        if phone_match:
-            session["phone"] = phone_match.group().strip()
+        # Extract phone number (very flexible - any 7+ digit sequence)
+        phone_patterns = [
+            r'(?:phone|contact|mobile|cell|tel)[:\s]*([+\d\s\-()]{7,})',
+            r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}',
+            r'\b0\d{9,10}\b',  # Sri Lankan format: 0771234567
+            r'\b\+94\d{9}\b',  # Sri Lankan with country code
+        ]
+        for pattern in phone_patterns:
+            phone_match = re.search(pattern, text, re.IGNORECASE)
+            if phone_match:
+                phone = phone_match.group(1) if phone_match.lastindex else phone_match.group()
+                phone = re.sub(r'[^\d+]', '', phone)  # Keep only digits and +
+                if len(phone) >= 7:
+                    session["phone"] = phone
+                    break
         
-        # Extract name patterns like "name is X", "I'm X", "my name X"
+        # Extract name - more flexible patterns
         name_patterns = [
-            r"(?:my name is|name is|i'm|i am|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-            r"name[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
+            r"(?:my name is|name is|i'm|i am|this is|name[:\s]+)\s*([A-Za-z]+(?:\s+[A-Za-z]+){0,2})",
+            r"(?:^|\s)([A-Z][a-z]+\s+[A-Z][a-z]+)(?:\s|,|$)",  # Two capitalized words
         ]
         for pattern in name_patterns:
             name_match = re.search(pattern, text, re.IGNORECASE)
             if name_match:
-                session["name"] = name_match.group(1).strip()
-                break
+                name = name_match.group(1).strip()
+                # Exclude common non-name words
+                if name.lower() not in ['the order', 'my order', 'an order', 'this order', 'new order']:
+                    session["name"] = name.title()
+                    break
         
-        # Extract address patterns
+        # Extract address - very flexible
         address_patterns = [
-            r"(?:address is|address[:\s]+|ship to|shipping address[:\s]+)(.+?)(?:,\s*(?:phone|email|contact)|$)",
-            r"(?:deliver to|delivery address[:\s]+)(.+?)(?:,\s*(?:phone|email|contact)|$)"
+            r"(?:address|ship to|deliver to|shipping|delivery)(?:\s+is)?[:\s]+(.+?)(?:,?\s*(?:phone|email|contact|mobile)|$)",
+            r"(?:address|ship to|deliver to)(?:\s+is)?[:\s]+(.+)",
         ]
         for pattern in address_patterns:
-            addr_match = re.search(pattern, text, re.IGNORECASE)
+            addr_match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
             if addr_match:
                 addr = addr_match.group(1).strip()
-                # Clean up the address
-                addr = re.sub(r'\s*(phone|email|contact).*$', '', addr, flags=re.IGNORECASE)
-                if len(addr) > 5:  # Minimum reasonable address length
+                # Clean up - remove leading "is" if present
+                addr = re.sub(r'^is\s+', '', addr, flags=re.IGNORECASE)
+                addr = re.sub(r'\s*(phone|email|contact|mobile).*$', '', addr, flags=re.IGNORECASE)
+                addr = re.sub(r'\s+', ' ', addr).strip()
+                if len(addr) > 5:
                     session["address"] = addr
-                break
+                    break
+        
+        # Also try to find address-like text with street/road keywords
+        if not session.get("address"):
+            addr_keywords = re.search(
+                r'(\d+[,\s]+[\w\s]+(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|way|place|pl|no\.|number)[\w\s,]+)',
+                text, re.IGNORECASE
+            )
+            if addr_keywords:
+                session["address"] = addr_keywords.group(1).strip()
         
         return session
 
@@ -391,7 +416,7 @@ class AIAgent:
         })
 
         try:
-            # Call Groq API
+            # Call Groq API with llama-3.3-70b
             chat_completion = self.client.chat.completions.create(
                 messages=messages,
                 model="llama-3.3-70b-versatile",
