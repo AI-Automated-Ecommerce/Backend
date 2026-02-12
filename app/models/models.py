@@ -96,5 +96,6 @@ class BusinessSettings(Base):
     contact_phone = Column(String(50))
     whatsapp_number = Column(String(50))
     address = Column(String(255))
+    bank_details = Column(Text)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 

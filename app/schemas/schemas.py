@@ -95,6 +95,7 @@ class BusinessSettingsBase(BaseModel):
     contact_phone: str | None = None
     whatsapp_number: str | None = None
     address: str | None = None
+    bank_details: str | None = None
 
 class BusinessSettingsCreate(BusinessSettingsBase):
     pass

@@ -41,7 +41,7 @@ class AIAgent:
         )
 
         # Initialize tools
-        self.tools = [self.search_products, self.get_business_info]
+        self.tools = [self.search_products, self.get_business_info, self.place_order]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
         # Build the graph
@@ -170,6 +170,125 @@ class AIAgent:
             
             print(f"DEBUG: TOOL get_business_info returning: {info[:100]}...")
             return info
+        finally:
+            db.close()
+
+    @staticmethod
+    @tool
+    def place_order(customer_name: str, customer_address: str, customer_phone: str, items: str) -> str:
+        """
+        Place an order for the customer.
+        Use this tool when the user confirms they want to buy specific items and provides their details.
+        
+        Args:
+            customer_name: Name of the customer.
+            customer_address: Delivery address.
+            customer_phone: Contact phone number.
+            items: A string listing items and quantities (e.g., "2x Headphones, 1x Watch").
+        
+        Returns:
+            A confirmation message with order ID and payment instructions (Bank Details).
+        """
+        print(f"DEBUG: TOOL place_order called. Name={customer_name}, Items={items}")
+        from app.core.database import SessionLocal
+        from app.models.models import Order, OrderItem, Product, BusinessSettings, OrderStatus
+        import re
+        
+        db = SessionLocal()
+        try:
+            # 1. Parse items (Simple heuristic or just text for now, but better to try parsing)
+            # For this MVP, we will try to find products mentions in the 'items' string
+            # and create a rough order.
+            
+            # Find all products to map names
+            all_products = db.query(Product).filter(Product.isActive == True).all()
+            
+            order_items = []
+            total_amount = 0
+            
+            # Simple parsing logic: separate by comma
+            item_list = items.split(',')
+            found_products_summary = []
+            
+            for item_text in item_list:
+                qty = 1
+                # Check for explicit quantity "2x Product"
+                match = re.search(r'(\d+)\s*[xX]?\s*(.*)', item_text.strip())
+                if match:
+                    try:
+                        qty = int(match.group(1))
+                        product_name_guess = match.group(2)
+                    except:
+                        product_name_guess = item_text.strip()
+                else:
+                    product_name_guess = item_text.strip()
+                
+                # Match product
+                matched_product = None
+                for p in all_products:
+                    if p.name.lower() in product_name_guess.lower() or product_name_guess.lower() in p.name.lower():
+                        matched_product = p
+                        break
+                
+                if matched_product:
+                    order_items.append({
+                        "product": matched_product,
+                        "quantity": qty,
+                        "price": matched_product.price
+                    })
+                    total_amount += (matched_product.price * qty)
+                    found_products_summary.append(f"{qty}x {matched_product.name}")
+            
+            if not order_items:
+                return "I couldn't identify the products you want to order. Please double check the product names."
+
+            # 2. Create Order
+            # Check if user exists (mock or find by phone) - For simplicity, just create Order with customer details
+            # We can link to User if we had logic to lookup/create User.
+            
+            new_order = Order(
+                customerName=customer_name,
+                customerPhone=customer_phone,
+                shippingAddress=customer_address,
+                paymentMethod="Bank Transfer",
+                status=OrderStatus.PENDING,
+                totalAmount=total_amount, 
+                customerEmail="" # Optional
+            )
+            db.add(new_order)
+            db.commit()
+            db.refresh(new_order)
+            
+            # 3. Create OrderItems
+            for item in order_items:
+                db_item = OrderItem(
+                    orderId=new_order.id,
+                    productId=item["product"].id,
+                    quantity=item["quantity"],
+                    unitPrice=item["price"]
+                )
+                db.add(db_item)
+            
+            db.commit()
+            
+            # 4. Get Bank Details
+            settings = db.query(BusinessSettings).first()
+            bank_info = settings.bank_details if settings and settings.bank_details else "Please contact us for bank details."
+            
+            # 5. Formulate Response
+            summary_str = ", ".join(found_products_summary)
+            return (f"Order #{new_order.id} placed successfully!\n"
+                    f"Items: {summary_str}\n"
+                    f"Total Amount: ${total_amount:.2f}\n\n"
+                    f"Please transfer the amount to the following bank account to complete your purchase:\n"
+                    f"{bank_info}\n\n"
+                    f"Once paid, please send us the receipt here. A staff member will verify your payment manually.")
+            
+        except Exception as e:
+            print(f"ERROR in place_order: {e}")
+            import traceback
+            traceback.print_exc()
+            return "Sorry, there was an error placing your order. Please try again later."
         finally:
             db.close()
 
