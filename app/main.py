@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base
-from app.api.endpoints import products, orders, admin, chat, whatsapp
+from app.api.endpoints import products, orders, admin, chat, whatsapp, settings
 from scripts.seed import seed_data
 
 # Create tables (ensure DB matches models)
@@ -30,10 +30,10 @@ async def lifespan(app: FastAPI):
     from app.services.ai_agent import agent
     
     # Verify AI agent configuration
-    if agent.client:
-        print("✅ AI Agent initialized with Google Gemini API")
-        print(f"   Model: gemini-2.0-flash-exp")
-        print(f"   Security: Restricted to {agent.ALLOWED_TABLES}")
+    if hasattr(agent, 'llm') and agent.llm:
+        print("✅ AI Agent initialized with Google Gemini API (LangGraph)")
+        print(f"   Model: {agent.llm.model}")
+        # print(f"   Security: Restricted to {agent.ALLOWED_TABLES}") # ALLOWED_TABLES might be gone too
     else:
         print("⚠️  AI Agent initialized (Mock mode - no Gemini API key)")
         print("   Set GOOGLE_API_KEY in .env for full AI functionality")
@@ -79,3 +79,4 @@ app.include_router(orders.router, tags=["Orders"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(whatsapp.router, tags=["WhatsApp"])
+app.include_router(settings.router, tags=["Settings"])

@@ -52,3 +52,9 @@ uritemplate==4.2.0
 urllib3==2.6.3
 uvicorn==0.40.0
 websockets==15.0.1
+langgraph
+langchain
+langchain-google-genai
+langgraph
+langchain
+langchain-google-genai
