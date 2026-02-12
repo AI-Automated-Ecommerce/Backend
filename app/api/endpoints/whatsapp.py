@@ -1,7 +1,8 @@
 import os
 import requests
 import time
-from fastapi import APIRouter, Depends, Request, HTTPException, Query
+import random
+from fastapi import APIRouter, Depends, Request, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.ai_agent import agent
@@ -86,8 +87,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             else:
                 print("⚠️ No images to send")
             
-            # Then send the text reply
-            send_reply(from_number, ai_response)
+            # Then send the text reply (split into multiple messages)
+            messages = ai_response.split('|||')
+            for msg in messages:
+                if msg.strip():
+                    send_reply(from_number, msg.strip())
+                    time.sleep(1.5)  # Natural delay between messages
         
         return {"status": "processed"}
 
