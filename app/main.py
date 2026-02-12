@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base
-from app.api.endpoints import products, orders, admin, chat, whatsapp
+from app.api.endpoints import products, orders, admin, chat, whatsapp, settings
 from scripts.seed import seed_data
 
 # Create tables (ensure DB matches models)
@@ -30,13 +30,13 @@ async def lifespan(app: FastAPI):
     from app.services.ai_agent import agent
     
     # Verify AI agent configuration
-    if agent.client:
-        print("✅ AI Agent initialized with Groq API")
-        print(f"   Model: llama-3.3-70b-versatile")
-        print(f"   Security: Restricted to {agent.ALLOWED_TABLES}")
+    if hasattr(agent, 'llm') and agent.llm:
+        print("✅ AI Agent initialized with Google Gemini API (LangGraph)")
+        print(f"   Model: {agent.llm.model}")
+        # print(f"   Security: Restricted to {agent.ALLOWED_TABLES}") # ALLOWED_TABLES might be gone too
     else:
-        print("⚠️  AI Agent initialized (Mock mode - no Groq API key)")
-        print("   Set GROQ_API_KEY in .env for full AI functionality")
+        print("⚠️  AI Agent initialized (Mock mode - no Gemini API key)")
+        print("   Set GOOGLE_API_KEY in .env for full AI functionality")
     
     print("=" * 60)
     print("✅ Server ready!")
@@ -53,6 +53,7 @@ app = FastAPI(title="AI E-commerce Service", lifespan=lifespan)
 
 # --- CORS Configuration ---
 origins = [
+    "*",
     "http://localhost:3000",
     "http://localhost:8080",
     "http://localhost:8081",
@@ -79,3 +80,4 @@ app.include_router(orders.router, tags=["Orders"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(whatsapp.router, tags=["WhatsApp"])
+app.include_router(settings.router, tags=["Settings"])

@@ -14,7 +14,9 @@ def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     """
     try:
         response = agent.generate_response(request.query, db, request.user_id)
-        return {"response": response}
+        # For web chat, replace the delimiter with newlines
+        formatted_response = response.replace('|||', '\n\n')
+        return {"response": formatted_response}
     except Exception as e:
         print(f"Error in /chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))

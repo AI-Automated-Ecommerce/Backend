@@ -1,7 +1,8 @@
 import os
 import requests
 import time
-from fastapi import APIRouter, Depends, Request, HTTPException, Query
+import random
+from fastapi import APIRouter, Depends, Request, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.ai_agent import agent
@@ -9,7 +10,7 @@ from app.services.ai_agent import agent
 router = APIRouter()
 
 # Meta WhatsApp Configuration
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_API_TOKEN")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "my_secure_token")
 
@@ -28,14 +29,14 @@ async def verify_webhook(
 
 
 @router.post("/whatsapp")
-async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Webhook for WhatsApp messages via Meta Cloud API.
     Handles incoming JSON payload.
     """
     try:
         data = await request.json()
-        print(f"📩 Received webhook data: {data}")
+        print(f"Received webhook data: {data}")
         
         # Check if it's a valid message object
         entry = data.get("entry", [])[0] if data.get("entry") else {}
@@ -44,58 +45,79 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         messages = value.get("messages", [])
 
         if not messages:
-            print("⚠️ No messages in payload (might be a status update)")
+            print("No messages in payload (might be a status update)")
             return {"status": "ignored", "reason": "no messages"}
 
         msg_body = messages[0]
         from_number = msg_body.get("from")  # User's phone number
         msg_type = msg_body.get("type")
         
-        print(f"📱 Message from: {from_number}, Type: {msg_type}")
+        print(f"Message from: {from_number}, Type: {msg_type}")
 
         # We only support text messages for now
         if msg_type == "text":
             user_message = msg_body["text"]["body"]
-            print(f"💬 User said: {user_message}")
+            print(f"User said: {user_message}")
             
-            # Generate AI response with images
-            response_data = agent.generate_response_with_images(user_message, db, from_number)
-            ai_response = response_data["text"]
-            images = response_data.get("images", [])
-            
-            print(f"🤖 AI response: {ai_response[:100]}...")
-            print(f"🖼️ Found {len(images)} images to send")
-            
-            # Send product images first (if any)
-            if images:
-                print(f"📸 Attempting to send {len(images)} images...")
-                for i, img_data in enumerate(images):
-                    print(f"  Image {i+1}: {img_data['product_name']} - {img_data['image_url']}")
-                    caption = f"📦 {img_data['product_name']} - ${img_data['price']:.2f}"
-                    if img_data['stock'] > 0:
-                        caption += f" ({img_data['stock']} in stock)"
-                    else:
-                        caption += " (Out of stock)"
-                    
-                    success = send_image(from_number, img_data['image_url'], caption)
-                    print(f"  → Image {i+1} send result: {success}")
-                    time.sleep(0.5)  # Small delay between images
-                
-                # Delay before sending text to avoid rate limiting
-                time.sleep(1)
-            else:
-                print("⚠️ No images to send")
-            
-            # Then send the text reply
-            send_reply(from_number, ai_response)
+            # Process in background to avoid webhook timeout and implement human-like delay
+            background_tasks.add_task(handle_whatsapp_response, from_number, user_message, db)
         
         return {"status": "processed"}
 
     except Exception as e:
-        print(f"❌ Error in WhatsApp webhook: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error in WhatsApp webhook: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
+    """
+    Background task to process AI response, add random delay, and send message.
+    """
+    try:
+        # 1. Generate AI response (do this first)
+        response_data = agent.generate_response_with_images(user_message, db, from_number)
+        ai_response = response_data["text"]
+        images = response_data.get("images", [])
+        
+        # 2. Calculate random human-like delay (5 to 60 seconds)
+        delay_seconds = random.randint(5, 10)
+        print(f"Human-like delay: {delay_seconds}s for {from_number}")
+        
+        # 3. Wait for the delay
+        time.sleep(delay_seconds)
+        
+        # 4. Send product images first (if any)
+        if images:
+            for img_data in images:
+                caption = f"{img_data['product_name']} - ${img_data['price']:.2f}"
+                if img_data['stock'] > 0:
+                    caption += f" ({img_data['stock']} in stock)"
+                else:
+                    caption += " (Out of stock)"
+                
+                send_image(from_number, img_data['image_url'], caption)
+                time.sleep(1) # Small gap between images
+            
+            time.sleep(1) # Gap between images and final text
+        
+        # 5. Send final text reply (simulate human typing by splitting sentences)
+        import re
+        # Split by sentence delimiters (., !, ?) but keep the delimiter
+        # This regex splits by (. ! ?) followed by space or end of string
+        sentences = re.split(r'(?<=[.!?])\s+', ai_response)
+        
+        for sentence in sentences:
+            if sentence.strip():
+                # Simulate typing time: ~0.1s per character, min 1s, max 5s
+                typing_time = min(max(len(sentence) * 0.1, 1), 5)
+                time.sleep(typing_time)
+                
+                send_reply(from_number, sentence.strip())
+                
+        print(f"Successfully processed and sent response after {delay_seconds}s delay")
+
+    except Exception as e:
+        print(f"Error processing background response: {e}")
 
 
 def send_reply(to_number: str, text_body: str):

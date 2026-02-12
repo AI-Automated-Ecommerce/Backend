@@ -87,3 +87,15 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     # product relationship could be added
+
+class BusinessSettings(Base):
+    __tablename__ = "BusinessSettings"
+    id = Column(Integer, primary_key=True, index=True)
+    business_name = Column(String(100), default="My Business")
+    contact_email = Column(String(100))
+    contact_phone = Column(String(50))
+    whatsapp_number = Column(String(50))
+    address = Column(String(255))
+    bank_details = Column(Text)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+

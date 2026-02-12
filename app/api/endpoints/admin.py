@@ -27,26 +27,51 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 @router.get("/admin/orders")
 def get_admin_orders(db: Session = Depends(get_db)):
-    orders = db.query(Order).order_by(Order.createdAt.desc()).all()
+    from sqlalchemy.orm import joinedload
+    orders = db.query(Order).options(joinedload(Order.user), joinedload(Order.items)).order_by(Order.createdAt.desc()).all()
     # Serialize with customer info
     result = []
     for o in orders:
+        customer_name = "Unknown"
+        customer_email = "N/A"
+        customer_phone = "N/A"
+        shipping_address = "N/A"
+
+        # Check if user exists before accessing attributes
+        if o.user:
+            customer_name = o.user.name or "Unknown"
+            # specific fix for the crash: check if o.user.id exists/is not None just in case, though logically it should be if o.user is not None
+            user_id = o.user.id if o.user.id else "unknown"
+            customer_email = f"user{user_id}@example.com"
+            customer_phone = o.user.phoneNumber or "N/A"
+            shipping_address = o.user.address or "N/A"
+        
+        # Override with order specific details if available
+        if o.customerName:
+            customer_name = o.customerName
+        if o.customerEmail:
+            customer_email = o.customerEmail
+        if o.customerPhone:
+            customer_phone = o.customerPhone
+        if o.shippingAddress:
+            shipping_address = o.shippingAddress
+
         result.append({
             "id": str(o.id),
-            "customerName": o.customerName or o.user.name,
-            "customerEmail": o.customerEmail or f"user{o.user.id}@example.com",
-            "customerPhone": o.customerPhone or o.user.phoneNumber,
-            "shippingAddress": o.shippingAddress or o.user.address,
+            "customerName": customer_name,
+            "customerEmail": customer_email,
+            "customerPhone": customer_phone,
+            "shippingAddress": shipping_address,
             "paymentMethod": o.paymentMethod or "N/A",
-            "total": float(o.totalAmount),
-            "status": o.status.value.lower() if hasattr(o.status, 'value') else o.status.lower(),
+            "total": float(o.totalAmount) if o.totalAmount else 0.0,
+            "status": o.status.value.lower() if hasattr(o.status, 'value') else str(o.status).lower(),
             "createdAt": o.createdAt,
             "items": [
                 {
                     "productId": str(i.productId),
                     "productName": db.query(Product.name).filter(Product.id == i.productId).scalar() or "Unknown",
                     "quantity": i.quantity,
-                    "price": float(i.unitPrice)
+                    "price": float(i.unitPrice) if i.unitPrice else 0.0
                 } for i in o.items
             ]
         })

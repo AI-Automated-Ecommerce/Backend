@@ -1,4 +1,5 @@
 from pydantic import BaseModel, validator
+from datetime import datetime
 
 
 class ChatRequest(BaseModel):
@@ -86,3 +87,26 @@ class ProductUpdate(BaseModel):
 class OrderStatusUpdate(BaseModel):
     """Schema for updating order status."""
     status: str
+
+
+class BusinessSettingsBase(BaseModel):
+    business_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    whatsapp_number: str | None = None
+    address: str | None = None
+    bank_details: str | None = None
+
+class BusinessSettingsCreate(BusinessSettingsBase):
+    pass
+
+class BusinessSettingsUpdate(BusinessSettingsBase):
+    pass
+
+class BusinessSettingsResponse(BusinessSettingsBase):
+    id: int
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
