@@ -9,7 +9,7 @@ from app.services.ai_agent import agent
 router = APIRouter()
 
 # Meta WhatsApp Configuration
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_API_TOKEN")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "my_secure_token")
 

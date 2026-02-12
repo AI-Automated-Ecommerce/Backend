@@ -1,0 +1,29 @@
+INFO:     Will watch for changes in these directories: ['/Users/yasiru/Documents/GitHub/AI-Automated-Business/Backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [96053] using StatReload
+INFO:     Started server process [96129]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+============================================================
+🚀 Starting E-commerce AI Service...
+============================================================
+📦 Seeding database...
+Database already contains data. Skipping seed.
+✅ Database seeded
+🤖 Initializing AI Agent...
+✅ AI Agent initialized with Google Gemini API
+   Model: gemini-2.0-flash-exp
+   Security: Restricted to ['Product', 'Category']
+============================================================
+✅ Server ready!
+============================================================
+Gemini API Error: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.', 'status': 'RESOURCE_EXHAUSTED'}}
+INFO:     127.0.0.1:64086 - "POST /chat HTTP/1.1" 200 OK
+WARNING:  StatReload detected changes in 'app/services/ai_agent.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [96129]
+INFO:     Started server process [96503]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

@@ -4,7 +4,8 @@ import json
 import datetime
 from sqlalchemy.orm import Session
 from app.models.models import Product, Category
-from groq import Groq
+import google.genai as genai
+from google.genai import types
 
 
 class AIAgent:
@@ -19,16 +20,19 @@ class AIAgent:
     ALLOWED_TABLES = ['Product', 'Category']
     
     def __init__(self):
-        """Initialize the AI agent with Groq API and conversation history."""
-        api_key = os.environ.get("GROQ_API_KEY")
+        """Initialize the AI agent with Google Gemini API and conversation history."""
+        api_key = os.environ.get("GOOGLE_API_KEY")
         self.frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
         
         self.client = None
-        if api_key and api_key.startswith("gsk_"):
+        if api_key:
             try:
-                self.client = Groq(api_key=api_key)
+                self.client = genai.Client(api_key=api_key)
+                # We don't need to configure a specific model instance here in the new SDK
+                # but we will store the model name cleanly
+                self.model_name = "gemini-2.5-flash" 
             except Exception as e:
-                print(f"Failed to init Groq: {e}")
+                print(f"Failed to init Gemini: {e}")
         
         # In-memory conversation history: {user_id: [{role, content}, ...]}
         self.conversation_history = {}
@@ -467,9 +471,9 @@ class AIAgent:
         # Get session state for prompt injection
         session_state = self._get_session_state_prompt(session)
         
-        # Fallback if no Groq API key
+        # Fallback if no Gemini API key
         if not self.client:
-            return f"[MOCK AI] Asked: '{user_query}'.\n\nFound:\n{context}\n\nSession: {session}\n\n(Set GROQ_API_KEY in .env for real AI responses)"
+            return f"[MOCK AI] Asked: '{user_query}'.\n\nFound:\n{context}\n\nSession: {session}\n\n(Set GOOGLE_API_KEY in .env for real AI responses)"
 
         # Get conversation history
         user_history = self.conversation_history.get(user_id, [])
@@ -493,14 +497,37 @@ class AIAgent:
         })
 
         try:
-            # Call Groq API with llama-3.1-8b-instant (faster, lower token usage)
-            chat_completion = self.client.chat.completions.create(
-                messages=messages,
-                model="llama-3.1-8b-instant",
-                temperature=0.7,
-                max_tokens=512  # Reduced to save tokens
+            # Build conversation for Gemini
+            # Convert messages to Gemini format
+            contents = []
+            
+            # Add system instruction if supported, or prepend to first user message
+            # The new SDK supports system_instruction in generate_content, but let's stick to chat mode or contents
+            
+            # Simple conversion:
+            for msg in messages:
+                role = "user" if msg["role"] == "user" else "model"
+                if msg["role"] == "system":
+                   # We will pass system prompt separately
+                   continue
+                
+                contents.append(types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])]
+                ))
+            
+            # Call Gemini
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_prompt,
+                    temperature=0.7,
+                    max_output_tokens=512,
+                )
             )
-            ai_response = chat_completion.choices[0].message.content
+            
+            ai_response = response.text
             
             # Store conversation history
             if user_id not in self.conversation_history:
@@ -525,6 +552,7 @@ class AIAgent:
             return ai_response
             
         except Exception as e:
+            print(f"Gemini API Error: {e}")
             return f"Error connecting to AI service: {str(e)}"
 
     def generate_response_with_images(self, user_query: str, db: Session, user_id: str) -> dict:

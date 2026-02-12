@@ -31,12 +31,12 @@ async def lifespan(app: FastAPI):
     
     # Verify AI agent configuration
     if agent.client:
-        print("✅ AI Agent initialized with Groq API")
-        print(f"   Model: llama-3.3-70b-versatile")
+        print("✅ AI Agent initialized with Google Gemini API")
+        print(f"   Model: gemini-2.0-flash-exp")
         print(f"   Security: Restricted to {agent.ALLOWED_TABLES}")
     else:
-        print("⚠️  AI Agent initialized (Mock mode - no Groq API key)")
-        print("   Set GROQ_API_KEY in .env for full AI functionality")
+        print("⚠️  AI Agent initialized (Mock mode - no Gemini API key)")
+        print("   Set GOOGLE_API_KEY in .env for full AI functionality")
     
     print("=" * 60)
     print("✅ Server ready!")
