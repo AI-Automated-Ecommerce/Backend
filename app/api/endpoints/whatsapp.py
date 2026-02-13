@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, Query, Backgroun
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.ai_agent import agent
+from app.services.chat_history import add_message, clear_chat_history
 
 router = APIRouter()
 
@@ -57,6 +58,17 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, 
             user_message = msg_body["text"]["body"]
             print(f"User said: {user_message}")
             
+            # Check for special commands
+            if user_message.strip().lower() == "/clear":
+                clear_chat_history(db, from_number)
+                send_reply(from_number, "Conversaton history cleared.")
+                # Also need to clear agent memory for this user
+                agent.clear_history(from_number) 
+                return {"status": "processed", "command": "clear"}
+
+            # Save user message to database
+            add_message(db, from_number, "user", user_message)
+            
             # Process in background to avoid webhook timeout and implement human-like delay
             background_tasks.add_task(handle_whatsapp_response, from_number, user_message, db)
         
@@ -101,6 +113,8 @@ def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
             if sentence.strip():
                 # Send immediately - no typing delay
                 send_reply(from_number, sentence.strip())
+                # Save AI response to database
+                add_message(db, from_number, "assistant", sentence.strip())
         
         print(f"Successfully processed and sent response immediately")
 

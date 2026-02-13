@@ -127,3 +127,11 @@ class BusinessDetail(Base):
     title = Column(String(100))
     content = Column(Text)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+class Message(Base):
+    __tablename__ = "Message"
+    id = Column(Integer, primary_key=True, index=True)
+    user_phone = Column(String(50), index=True) # WhatsApp number
+    role = Column(String(20)) # 'user' or 'assistant'
+    content = Column(Text)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())

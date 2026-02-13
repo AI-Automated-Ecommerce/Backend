@@ -118,3 +118,21 @@ class BusinessSettingsResponse(BusinessSettingsBase):
     class Config:
         from_attributes = True
 
+
+class BusinessDetailBase(BaseModel):
+    title: str
+    content: str
+
+class BusinessDetailCreate(BusinessDetailBase):
+    pass
+
+class BusinessDetailUpdate(BaseModel):
+    title: str | None = None
+    content: str | None = None
+
+class BusinessDetailResponse(BusinessDetailBase):
+    id: int
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, desc
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.models.models import Order, Product, User
+from app.models.models import Order, Product, User, Message, OrderStatus
 from app.schemas.schemas import OrderStatusUpdate
 from app.services.google_drive import upload_to_drive
 
@@ -166,3 +166,138 @@ async def upload_image(file: UploadFile = File(...)):
         return {"imageUrl": image_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/chats")
+def get_customer_chats(db: Session = Depends(get_db)):
+    """
+    Get all customer conversations with their latest message and ongoing orders.
+    """
+    from sqlalchemy.orm import joinedload
+    from sqlalchemy import and_
+    
+    # Get all unique phone numbers that have sent messages
+    unique_phones = db.query(Message.user_phone).distinct().all()
+    phone_numbers = [phone[0] for phone in unique_phones]
+    
+    conversations = []
+    
+    for phone in phone_numbers:
+        # Get user info if exists
+        user = db.query(User).filter(User.phoneNumber == phone).first()
+        customer_name = user.name if user else f"Customer {phone[-4:]}"
+        
+        # Get latest message
+        latest_message = db.query(Message).filter(
+            Message.user_phone == phone
+        ).order_by(desc(Message.timestamp)).first()
+        
+        # Get message count
+        message_count = db.query(Message).filter(Message.user_phone == phone).count()
+        
+        # Get ongoing orders (not completed or cancelled)
+        ongoing_orders = db.query(Order).filter(
+            and_(
+                Order.customerPhone == phone,
+                Order.status.in_([OrderStatus.PENDING, OrderStatus.PAYMENT_REVIEW_REQUESTED, OrderStatus.PAID, OrderStatus.SHIPPED])
+            )
+        ).all()
+        
+        conversations.append({
+            "phoneNumber": phone,
+            "customerName": customer_name,
+            "customerEmail": user.email if user and user.email else f"user{user.id}@example.com" if user else "N/A",
+            "lastMessage": latest_message.content if latest_message else "No messages",
+            "lastMessageTime": latest_message.timestamp if latest_message else None,
+            "lastMessageRole": latest_message.role if latest_message else None,
+            "messageCount": message_count,
+            "ongoingOrders": [
+                {
+                    "id": str(order.id),
+                    "status": order.status.value if hasattr(order.status, 'value') else str(order.status),
+                    "totalAmount": float(order.totalAmount) if order.totalAmount else 0.0,
+                    "createdAt": order.createdAt
+                } for order in ongoing_orders
+            ],
+            "hasUnread": latest_message.role == "user" if latest_message else False
+        })
+    
+    # Sort by last message time (most recent first)
+    conversations.sort(key=lambda x: x["lastMessageTime"] or "", reverse=True)
+    
+    return conversations
+
+
+@router.get("/admin/chats/{phone_number}")
+def get_customer_chat_history(phone_number: str, db: Session = Depends(get_db)):
+    """
+    Get full chat history for a specific customer phone number.
+    """
+    # Get user info
+    user = db.query(User).filter(User.phoneNumber == phone_number).first()
+    
+    # Get all messages for this phone number
+    messages = db.query(Message).filter(
+        Message.user_phone == phone_number
+    ).order_by(Message.timestamp.asc()).all()
+    
+    # Get all orders for this customer
+    orders = db.query(Order).options(joinedload(Order.items)).filter(
+        Order.customerPhone == phone_number
+    ).order_by(desc(Order.createdAt)).all()
+    
+    return {
+        "phoneNumber": phone_number,
+        "customerName": user.name if user else f"Customer {phone_number[-4:]}",
+        "customerEmail": user.email if user and user.email else f"user{user.id}@example.com" if user else "N/A",
+        "customerAddress": user.address if user else "N/A",
+        "joinedDate": user.createdAt if user else None,
+        "messages": [
+            {
+                "id": str(msg.id),
+                "role": msg.role,
+                "content": msg.content,
+                "timestamp": msg.timestamp
+            } for msg in messages
+        ],
+        "orders": [
+            {
+                "id": str(order.id),
+                "status": order.status.value if hasattr(order.status, 'value') else str(order.status),
+                "totalAmount": float(order.totalAmount) if order.totalAmount else 0.0,
+                "createdAt": order.createdAt,
+                "itemCount": len(order.items) if order.items else 0,
+                "paymentMethod": order.paymentMethod or "N/A"
+            } for order in orders
+        ]
+    }
+
+
+@router.post("/admin/chats/{phone_number}/send")
+def send_admin_message(phone_number: str, message_data: dict, db: Session = Depends(get_db)):
+    """
+    Send a message from admin to customer via WhatsApp.
+    """
+    try:
+        from app.api.endpoints.whatsapp import send_reply
+        
+        message_content = message_data.get("message", "").strip()
+        if not message_content:
+            raise HTTPException(status_code=400, detail="Message content is required")
+        
+        # Send WhatsApp message
+        send_reply(phone_number, message_content)
+        
+        # Save message to chat history
+        new_message = Message(
+            user_phone=phone_number,
+            role="assistant",
+            content=message_content
+        )
+        db.add(new_message)
+        db.commit()
+        
+        return {"status": "success", "message": "Message sent successfully"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")

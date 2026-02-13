@@ -20,8 +20,11 @@ from app.services.tools import (
     get_payment_details,
     add_to_cart,
     view_cart,
-    generate_invoice
+    generate_invoice,
+    get_business_details_tool,
+    confirm_user_payment
 )
+from app.services.chat_history import get_chat_history
 
 # Define the Agent State
 class AgentState(TypedDict):
@@ -50,7 +53,7 @@ class AIAgent:
         )
 
         # Initialize tools
-        self.tools = [search_products, get_business_info, add_to_cart, view_cart, generate_invoice, get_payment_details]
+        self.tools = [search_products, get_business_info, add_to_cart, view_cart, generate_invoice, get_payment_details, get_business_details_tool, confirm_user_payment]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
         # Build the graph
@@ -135,18 +138,51 @@ class AIAgent:
         
         current_state = self.app.get_state(config)
         
+        # Retrieve conversation history from database
+        history_msgs = get_chat_history(db, user_id, limit=5)
+        history_prompts = []
+        for msg in history_msgs:
+            if not msg.content or not msg.content.strip():
+                continue
+                
+            if msg.role == 'user':
+                history_prompts.append(HumanMessage(content=msg.content))
+            else:
+                history_prompts.append(AIMessage(content=msg.content))
+        
         inputs = None
         if not current_state.values:
+             # Detect language
+             detected_lang = self.detect_language(user_query)
+             print(f"DEBUG: Detected language: {detected_lang}")
+
+             # Determine if this is the start of a conversation
+             is_first_message = len(history_prompts) == 0
+             greeting_instruction = ""
+             if is_first_message:
+                 greeting_instruction = f"This is the first message from the user. You MUST start with a warm greeting in {detected_lang}."
+
              # Prepend system prompt to user query to ensure compatibility with all model versions/SDKs
              combined_query = (f"System Instruction: {system_prompt}\n"
+                               f"IMPORTANT: The user is speaking in {detected_lang}. You MUST reply in {detected_lang} ONLY. Do not use English unless the user speaks English.\n"
+                               f"{greeting_instruction}\n"
                                f"IMPORTANT: When a user wants to buy something:\n"
                                f"1. Use 'generate_invoice' tool to create an order summary.\n"
                                f"2. Ask the user to CONFIRM the invoice details.\n"
                                f"3. ONLY after they confirm, use 'get_payment_details' tool to show bank info.\n"
                                f"4. Do NOT show bank details before confirmation.\n\n"
+                               f"Previous Context: {history_prompts}\n"
                                f"User Query: {user_query}")
              inputs = {"messages": [HumanMessage(content=combined_query)], "user_id": user_id, "session_data": {}}
         else:
+             # In a persistent graph state, we might not need to inject history every time if the state is preserved.
+             # But since we are using MemorySaver and want to ensure DB persistence is the source of truth across restarts:
+             # We can append history if the state is empty (handled above) or just trust the graph state for short term.
+             # However, the user specifically requested using phone number as unique identifier and database for context.
+             # So passing history in the prompt is a good way to ensure it's always there.
+             # But continuously appending history to the prompt might duplicate if the graph state also has it.
+             # For this implementation, we will trust the graph state for the immediate session, 
+             # but the INITIAL state construction (above) is where we inject DB history.
              inputs = {"messages": [HumanMessage(content=user_query)]}
             
         # We'll use invoke to get the final result
@@ -257,6 +293,24 @@ class AIAgent:
                 })
         return images
     
+    def detect_language(self, text: str) -> str:
+        """
+        Detects the language of the input text using the LLM.
+        Returns: 'English', 'Sinhala', 'Tamil', or 'Singlish'.
+        """
+        prompt = f"""
+        Analyze the following text and determine its language.
+        Possible languages: English, Sinhala, Tamil, Singlish.
+        
+        Singlish is Sinhala written in English characters (e.g., 'Kohomada' means 'How are you').
+        
+        Text: '{text}'
+        
+        Return ONLY the language name.
+        """
+        response = self.llm.invoke(prompt)
+        return response.content.strip()
+
     def clear_history(self, user_id: str):
         # Reset memory for the thread
         config = {"configurable": {"thread_id": user_id}}

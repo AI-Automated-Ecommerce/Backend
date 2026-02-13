@@ -7,6 +7,8 @@ from .business_info import get_business_info
 from .payment_details import get_payment_details
 from .cart_operations import add_to_cart, view_cart
 from .invoice import generate_invoice
+from .business_details import get_business_details_tool
+from .confirm_payment import confirm_user_payment
 
 __all__ = [
     'search_products',
@@ -15,4 +17,6 @@ __all__ = [
     'add_to_cart',
     'view_cart',
     'generate_invoice',
+    'get_business_details_tool',
+    'confirm_user_payment',
 ]
