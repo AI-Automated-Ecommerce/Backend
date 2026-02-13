@@ -89,6 +89,14 @@ class OrderStatusUpdate(BaseModel):
     status: str
 
 
+class PaymentReceiptUpload(BaseModel):
+    """Schema for payment receipt upload response."""
+    order_id: int
+    receipt_url: str
+    status: str
+    message: str
+
+
 class BusinessSettingsBase(BaseModel):
     business_name: str | None = None
     contact_email: str | None = None

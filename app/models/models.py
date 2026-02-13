@@ -6,6 +6,7 @@ from app.core.database import Base
 
 class OrderStatus(enum.Enum):
     PENDING = "PENDING"
+    PAYMENT_REVIEW_REQUESTED = "PAYMENT_REVIEW_REQUESTED"
     PAID = "PAID"
     SHIPPED = "SHIPPED"
     COMPLETED = "COMPLETED"
@@ -71,6 +72,7 @@ class Order(Base):
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING)
     totalAmount = Column(Numeric(10, 2))
     paymentRef = Column(String(100))
+    paymentReceiptUrl = Column(String(500), nullable=True)
     createdAt = Column(DateTime(timezone=True), server_default=func.now())
     updatedAt = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -99,3 +101,29 @@ class BusinessSettings(Base):
     bank_details = Column(Text)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
+class Cart(Base):
+    __tablename__ = "Cart"
+    id = Column(Integer, primary_key=True, index=True)
+    user_phone = Column(String(50), index=True) # Identifier for WhatsApp users
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    items = relationship("CartItem", back_populates="cart", cascade="all, delete-orphan")
+
+class CartItem(Base):
+    __tablename__ = "CartItem"
+    id = Column(Integer, primary_key=True, index=True)
+    cart_id = Column(Integer, ForeignKey("Cart.id"))
+    product_id = Column(Integer, ForeignKey("Product.id"))
+    quantity = Column(Integer, default=1)
+    
+    cart = relationship("Cart", back_populates="items")
+    product = relationship("Product")
+
+
+class BusinessDetail(Base):
+    __tablename__ = "BusinessDetail"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(100))
+    content = Column(Text)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

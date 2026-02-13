@@ -85,13 +85,40 @@ def update_order_status(order_id: int, status_update: OrderStatusUpdate, db: Ses
     
     # Map string status to Enum if needed, or just partial match
     # Assuming simplistic status for now
-    valid_statuses = ["PENDING", "PAID", "SHIPPED", "COMPLETED", "CANCELLED"]
+    valid_statuses = ["PENDING", "PAYMENT_REVIEW_REQUESTED", "PAID", "SHIPPED", "COMPLETED", "CANCELLED"]
     new_status = status_update.status.upper()
     if new_status not in valid_statuses:
          raise HTTPException(status_code=400, detail="Invalid status")
-         
+    
+    # Store old status to check for transitions
+    old_status = order.status.value if hasattr(order.status, 'value') else str(order.status)
+    
+    # Update order status
     order.status = new_status
     db.commit()
+    
+    # Send WhatsApp notification when payment is confirmed
+    if new_status == "PAID" and old_status == "PAYMENT_REVIEW_REQUESTED":
+        try:
+            from app.api.endpoints.whatsapp import send_reply
+            
+            customer_phone = order.customerPhone
+            if customer_phone:
+                message = (
+                    "✅ *Payment Confirmed!*\n\n"
+                    "Your payment has been successfully received and verified.\n\n"
+                    "🚚 *Delivery Information:*\n"
+                    "Your order will be delivered within *3-4 business days*.\n\n"
+                    f"📦 *Order ID:* {order.id}\n"
+                    f"💰 *Total Amount:* ${float(order.totalAmount):.2f}\n\n"
+                    "Thank you for your purchase! 🎉"
+                )
+                send_reply(customer_phone, message)
+                print(f"✅ WhatsApp payment confirmation sent to {customer_phone}")
+        except Exception as e:
+            print(f"⚠️ Failed to send WhatsApp notification: {e}")
+            # Don't fail the status update if WhatsApp fails
+    
     return {"status": "success", "new_status": new_status}
 
 @router.get("/admin/customers")

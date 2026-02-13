@@ -9,10 +9,19 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 
 from langgraph.graph.message import add_messages
+
+# Import tools from the tools module
+from app.services.tools import (
+    search_products,
+    get_business_info,
+    get_payment_details,
+    add_to_cart,
+    view_cart,
+    generate_invoice
+)
 
 # Define the Agent State
 class AgentState(TypedDict):
@@ -41,7 +50,7 @@ class AIAgent:
         )
 
         # Initialize tools
-        self.tools = [self.search_products, self.get_business_info, self.place_order]
+        self.tools = [search_products, get_business_info, add_to_cart, view_cart, generate_invoice, get_payment_details]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
         # Build the graph
@@ -72,227 +81,8 @@ class AIAgent:
         # Path to save chat logs
         self.log_file = "chat_logs.json"
 
-    # --- TOOLS ---
-
-    @staticmethod
-    @tool
-    def search_products(query: str, category_filter: str = None) -> str:
-        """
-        Search for products in the store based on a query. 
-        Use this tool when the user asks about products, availability, or prices.
-        
-        Args:
-            query: The search query (e.g., "headphones", "wireless mouse").
-            category_filter: Optional category ID to filter results.
-        
-        Returns:
-            A string containing details of matching products.
-        """
-        print(f"DEBUG: TOOL search_products called with query='{query}' kwargs={{'category_filter': '{category_filter}'}}")
-        # Note: In a real scenario, we'd need to inject the DB session.
-        # For this refactor, we will rely on a globally available session or creating one.
-        # Since tools are static, we'll create a new session here.
-        from app.core.database import SessionLocal
-        db = SessionLocal()
-        try:
-            # Clean query
-            cleaned_query = re.sub(r'[^\w\s]', '', query.lower())
-            query_words = [w for w in cleaned_query.split() if w and len(w) > 2]
-            
-            # Check if query is generic (user wants to browse all products)
-            generic_terms = {'products', 'items', 'inventory', 'catalog', 'stock', 'available', 'list', 'all', 'everything', 'show', 'have', 'sell', 'offer'}
-            is_generic = any(word in generic_terms for word in cleaned_query.split())
-
-            products_query = db.query(Product).filter(Product.isActive == True)
-            if category_filter:
-                products_query = products_query.filter(Product.categoryId == category_filter)
-            
-            all_products = products_query.all()
-            
-            scored_products = []
-            
-            if not is_generic:
-                # Specific search: score by keyword relevance
-                for product in all_products:
-                    score = 0
-                    prod_text = (product.name + " " + (product.description or "")).lower()
-                    
-                    if query.lower() in product.name.lower():
-                        score += 5
-                    
-                    for word in query_words:
-                        if word in prod_text:
-                            score += 1
-                    
-                    if score > 0:
-                        scored_products.append((product, score))
-            
-            # If generic query OR keyword search found nothing, return all products
-            if is_generic or not scored_products:
-                scored_products = [(p, 1) for p in all_products]
-            
-            scored_products.sort(key=lambda x: x[1], reverse=True)
-            top_products = [p for p, s in scored_products[:5]]
-            
-            if not top_products:
-                result = "No products found matching that description."
-            else:
-                result = "Found the following products:\n"
-                for p in top_products:
-                    stock_status = f"{p.stockQuantity} in stock" if p.stockQuantity > 0 else "Out of stock"
-                    result += f"- {p.name} (ID: {p.id}): ${p.price}. {p.description or ''} [{stock_status}] Image: {p.imageUrl}\n"
-            
-            print(f"DEBUG: TOOL search_products returning: {result[:100]}...")
-            return result
-        finally:
-            db.close()
-
-    @staticmethod
-    @tool
-    def get_business_info() -> str:
-        """
-        Get contact details and general information about the business.
-        Use this tool when the user asks for contact info, address, email, or about the company.
-        """
-        print("DEBUG: TOOL get_business_info called")
-        from app.core.database import SessionLocal
-        db = SessionLocal()
-        try:
-            settings = db.query(BusinessSettings).first()
-            if not settings:
-                return "Business information is not configured."
-            
-            info = f"Business Name: {settings.business_name}\n"
-            if settings.contact_phone: info += f"Phone: {settings.contact_phone}\n"
-            if settings.whatsapp_number: info += f"WhatsApp: {settings.whatsapp_number}\n"
-            if settings.contact_email: info += f"Email: {settings.contact_email}\n"
-            if settings.address: info += f"Address: {settings.address}\n"
-            
-            print(f"DEBUG: TOOL get_business_info returning: {info[:100]}...")
-            return info
-        finally:
-            db.close()
-
-    @staticmethod
-    @tool
-    def place_order(customer_name: str, customer_address: str, customer_phone: str, items: str) -> str:
-        """
-        Place an order for the customer.
-        Use this tool when the user confirms they want to buy specific items and provides their details.
-        
-        Args:
-            customer_name: Name of the customer.
-            customer_address: Delivery address.
-            customer_phone: Contact phone number.
-            items: A string listing items and quantities (e.g., "2x Headphones, 1x Watch").
-        
-        Returns:
-            A confirmation message with order ID and payment instructions (Bank Details).
-        """
-        print(f"DEBUG: TOOL place_order called. Name={customer_name}, Items={items}")
-        from app.core.database import SessionLocal
-        from app.models.models import Order, OrderItem, Product, BusinessSettings, OrderStatus
-        import re
-        
-        db = SessionLocal()
-        try:
-            # 1. Parse items (Simple heuristic or just text for now, but better to try parsing)
-            # For this MVP, we will try to find products mentions in the 'items' string
-            # and create a rough order.
-            
-            # Find all products to map names
-            all_products = db.query(Product).filter(Product.isActive == True).all()
-            
-            order_items = []
-            total_amount = 0
-            
-            # Simple parsing logic: separate by comma
-            item_list = items.split(',')
-            found_products_summary = []
-            
-            for item_text in item_list:
-                qty = 1
-                # Check for explicit quantity "2x Product"
-                match = re.search(r'(\d+)\s*[xX]?\s*(.*)', item_text.strip())
-                if match:
-                    try:
-                        qty = int(match.group(1))
-                        product_name_guess = match.group(2)
-                    except:
-                        product_name_guess = item_text.strip()
-                else:
-                    product_name_guess = item_text.strip()
-                
-                # Match product
-                matched_product = None
-                for p in all_products:
-                    if p.name.lower() in product_name_guess.lower() or product_name_guess.lower() in p.name.lower():
-                        matched_product = p
-                        break
-                
-                if matched_product:
-                    order_items.append({
-                        "product": matched_product,
-                        "quantity": qty,
-                        "price": matched_product.price
-                    })
-                    total_amount += (matched_product.price * qty)
-                    found_products_summary.append(f"{qty}x {matched_product.name}")
-            
-            if not order_items:
-                return "I couldn't identify the products you want to order. Please double check the product names."
-
-            # 2. Create Order
-            # Check if user exists (mock or find by phone) - For simplicity, just create Order with customer details
-            # We can link to User if we had logic to lookup/create User.
-            
-            new_order = Order(
-                customerName=customer_name,
-                customerPhone=customer_phone,
-                shippingAddress=customer_address,
-                paymentMethod="Bank Transfer",
-                status=OrderStatus.PENDING,
-                totalAmount=total_amount, 
-                customerEmail="" # Optional
-            )
-            db.add(new_order)
-            db.commit()
-            db.refresh(new_order)
-            
-            # 3. Create OrderItems
-            for item in order_items:
-                db_item = OrderItem(
-                    orderId=new_order.id,
-                    productId=item["product"].id,
-                    quantity=item["quantity"],
-                    unitPrice=item["price"]
-                )
-                db.add(db_item)
-            
-            db.commit()
-            
-            # 4. Get Bank Details
-            settings = db.query(BusinessSettings).first()
-            bank_info = settings.bank_details if settings and settings.bank_details else "Please contact us for bank details."
-            
-            # 5. Formulate Response
-            summary_str = ", ".join(found_products_summary)
-            return (f"Order #{new_order.id} placed successfully!\n"
-                    f"Items: {summary_str}\n"
-                    f"Total Amount: ${total_amount:.2f}\n\n"
-                    f"Please transfer the amount to the following bank account to complete your purchase:\n"
-                    f"{bank_info}\n\n"
-                    f"Once paid, please send us the receipt here. A staff member will verify your payment manually.")
-            
-        except Exception as e:
-            print(f"ERROR in place_order: {e}")
-            import traceback
-            traceback.print_exc()
-            return "Sorry, there was an error placing your order. Please try again later."
-        finally:
-            db.close()
-
     # --- NODE FUNCTIONS ---
+
 
     def call_model(self, state: AgentState):
         messages = state['messages']
@@ -348,7 +138,13 @@ class AIAgent:
         inputs = None
         if not current_state.values:
              # Prepend system prompt to user query to ensure compatibility with all model versions/SDKs
-             combined_query = f"System Instruction: {system_prompt}\n\nUser Query: {user_query}"
+             combined_query = (f"System Instruction: {system_prompt}\n"
+                               f"IMPORTANT: When a user wants to buy something:\n"
+                               f"1. Use 'generate_invoice' tool to create an order summary.\n"
+                               f"2. Ask the user to CONFIRM the invoice details.\n"
+                               f"3. ONLY after they confirm, use 'get_payment_details' tool to show bank info.\n"
+                               f"4. Do NOT show bank details before confirmation.\n\n"
+                               f"User Query: {user_query}")
              inputs = {"messages": [HumanMessage(content=combined_query)], "user_id": user_id, "session_data": {}}
         else:
              inputs = {"messages": [HumanMessage(content=user_query)]}
@@ -478,3 +274,5 @@ agent = AIAgent()
 if __name__ == "__main__":
     # Test block
     print("Agent initialized.")
+
+
