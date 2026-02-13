@@ -5,7 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.database import get_db
 from app.models.models import Order, OrderItem, User, Product, OrderStatus
 from app.schemas.schemas import OrderCreate, PlaceOrderRequest, PlaceOrderResponse, PaymentReceiptUpload
-from app.services.google_drive import upload_to_drive
+
 
 router = APIRouter()
 
@@ -235,7 +235,7 @@ async def upload_payment_receipt(
     
     This endpoint:
     - Accepts image uploads for payment proof
-    - Uploads to Google Drive for storage
+    - Uploads to Cloudinary for storage
     - Updates order status to PAYMENT_REVIEW_REQUESTED
     - Stores receipt URL in the order record
     
@@ -269,8 +269,9 @@ async def upload_payment_receipt(
         # Read file content
         content = await file.read()
         
-        # Upload to Google Drive
-        receipt_url = upload_to_drive(content, file.filename, file.content_type)
+        # Upload to Cloudinary
+        from app.services.cloudinary_service import upload_to_cloudinary
+        receipt_url = upload_to_cloudinary(content, file.filename)
         
         # Update order with receipt URL and status
         order.paymentReceiptUrl = receipt_url

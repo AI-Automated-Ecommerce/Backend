@@ -58,8 +58,26 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     if not db_product:
          raise HTTPException(status_code=404, detail="Product not found")
     
-    # Check dependencies (e.g. order items) if needed, or set isActive=False
-    # For now, let's just Soft Delete
-    db_product.isActive = False
-    db.commit()
+    # Check dependencies (e.g. order items)
+    # We can rely on database integrity error, or check manually.
+    # checking manually gives better error message
+    from app.models.models import OrderItem
+    dependencies = db.query(OrderItem).filter(OrderItem.productId == product_id).first()
+    if dependencies:
+        # Fallback to soft delete or error?
+        # User requested delete api, usually implies hard delete or at least "gone from view"
+        # If we can't hard delete, we should probably tell them why, OR soft delete.
+        # Let's try to return an error first as per plan.
+        raise HTTPException(status_code=400, detail="Cannot delete product because it is part of existing orders.")
+
+    try:
+        print(f"--- HARD DELETING PRODUCT {product_id} ---")
+        db.delete(db_product)
+        db.commit()
+        print(f"--- DELETED PRODUCT {product_id} ---")
+    except Exception as e:
+        print(f"--- DELETE FAILED: {e} ---")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete product: {str(e)}")
+    
     return {"status": "deleted"}

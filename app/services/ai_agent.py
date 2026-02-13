@@ -107,132 +107,142 @@ class AIAgent:
 
     # --- PUBLIC INTERFACE ---
 
-    def generate_response(self, user_query: str, db: Session, user_id: str) -> str:
+    def _run_agent(self, user_query: str, db: Session, user_id: str) -> dict:
         """
-        Generate AI response to user query using LangGraph.
+        Internal method to run the agent and return the full state.
         """
-        # Validate query (Keep existing validation logic if needed, or rely on LLM)
-        # We'll run a quick pre-check to block obvious malicious intent
+        # Validate query
         if not self._validate_query(user_query):
-            return "I cannot process that request."
+            return {"messages": [AIMessage(content="I cannot process that request.")]}
 
         # Config for the thread
         config = {"configurable": {"thread_id": user_id}}
         
-        # Initial state
-        # We need to fetch history if not already in memory (LangGraph Checkpointer handles persistence if configured correctly)
-        # For this refactor, we are using MemorySaver which is in-memory. 
-        # So we might start fresh or rely on the thread_id to resume.
-        
-        # Prepare the input
-        # We can also inject a system message here
+        # Get system prompt
         system_prompt = self._get_system_prompt(db)
-        
-        # Run the graph
-        # We verify if the thread exists, if not we start with system prompt
-        # Actually, `app.invoke` or `stream` is better.
-        
-        # NOTE: To maintain conversation history with MemorySaver, we just pass the new user message.
-        # The graph state (messages) will be updated.
-        # However, we need to ensure the SystemMessage is there at the beginning.
         
         current_state = self.app.get_state(config)
         
-        # Retrieve conversation history from database
+        # Retrieve conversation history (simplified for brevity, reliable on graph state + input injection)
         history_msgs = get_chat_history(db, user_id, limit=5)
         history_prompts = []
         for msg in history_msgs:
-            if not msg.content or not msg.content.strip():
-                continue
-                
-            if msg.role == 'user':
-                history_prompts.append(HumanMessage(content=msg.content))
-            else:
-                history_prompts.append(AIMessage(content=msg.content))
+            if not msg.content or not msg.content.strip(): continue
+            if msg.role == 'user': history_prompts.append(HumanMessage(content=msg.content))
+            else: history_prompts.append(AIMessage(content=msg.content))
         
         inputs = None
         if not current_state.values:
-             # Detect language
              detected_lang = self.detect_language(user_query)
-             print(f"DEBUG: Detected language: {detected_lang}")
-
-             # Determine if this is the start of a conversation
              is_first_message = len(history_prompts) == 0
              greeting_instruction = ""
              if is_first_message:
                  greeting_instruction = f"This is the first message from the user. You MUST start with a warm greeting in {detected_lang}."
 
-             # Prepend system prompt to user query to ensure compatibility with all model versions/SDKs
              combined_query = (f"System Instruction: {system_prompt}\n"
-                               f"IMPORTANT: The user is speaking in {detected_lang}. You MUST reply in {detected_lang} ONLY. Do not use English unless the user speaks English.\n"
+                               f"IMPORTANT: The user is speaking in {detected_lang}. You MUST reply in {detected_lang} ONLY.\n"
                                f"{greeting_instruction}\n"
                                f"IMPORTANT: When a user wants to buy something:\n"
                                f"1. Use 'generate_invoice' tool to create an order summary.\n"
                                f"2. Ask the user to CONFIRM the invoice details.\n"
                                f"3. ONLY after they confirm, use 'get_payment_details' tool to show bank info.\n"
-                               f"4. Do NOT show bank details before confirmation.\n\n"
                                f"Previous Context: {history_prompts}\n"
                                f"User Query: {user_query}")
              inputs = {"messages": [HumanMessage(content=combined_query)], "user_id": user_id, "session_data": {}}
         else:
-             # In a persistent graph state, we might not need to inject history every time if the state is preserved.
-             # But since we are using MemorySaver and want to ensure DB persistence is the source of truth across restarts:
-             # We can append history if the state is empty (handled above) or just trust the graph state for short term.
-             # However, the user specifically requested using phone number as unique identifier and database for context.
-             # So passing history in the prompt is a good way to ensure it's always there.
-             # But continuously appending history to the prompt might duplicate if the graph state also has it.
-             # For this implementation, we will trust the graph state for the immediate session, 
-             # but the INITIAL state construction (above) is where we inject DB history.
              inputs = {"messages": [HumanMessage(content=user_query)]}
             
-        # We'll use invoke to get the final result
+        # Invoke the graph
         result = self.app.invoke(inputs, config=config)
-        
-        # Extract the last message content
+        return result
+
+    def generate_response(self, user_query: str, db: Session, user_id: str) -> str:
+        """
+        Generate AI response to user query (Text only).
+        """
+        result = self._run_agent(user_query, db, user_id)
         last_message = result['messages'][-1]
-        response_text = last_message.content
-        
-        # Handle case where response is a list (new SDK behavior)
-        if isinstance(response_text, list):
-            # It might be [{'type': 'text', 'text': '...'}]
-            text_parts = []
-            for part in response_text:
-                if isinstance(part, dict) and 'text' in part:
-                    text_parts.append(part['text'])
-                elif isinstance(part, str):
-                    text_parts.append(part)
-            response_text = " ".join(text_parts)
-        
-        # Log interaction (Keep existing logging)
-        # self._log_interaction(user_id, user_query, "", response_text)
-        
-        return response_text
+        return self._parse_response_text(last_message.content)
 
     def generate_response_with_images(self, user_query: str, db: Session, user_id: str) -> dict:
         """
-        Generate AI response and include product images.
+        Generate AI response and include product images found by tools.
         """
-        response_text = self.generate_response(user_query, db, user_id)
+        result = self._run_agent(user_query, db, user_id)
+        last_message = result['messages'][-1]
+        response_text = self._parse_response_text(last_message.content)
         
-        # Simple heuristic to extract images from the response or previous context
-        # Since the tool returns image URLs, the LLM might include them in the text.
-        # We can parse them out or do a separate lookup.
-        # For backward compatibility, let's try to extract from the tool output if possible, 
-        # or just run a quick search like before if the text implies images.
-        
+        # Extract images from tool outputs in the conversation
         images = []
-        # Check if the response contains image references or if we should show images
-        if "Image:" in response_text or self._should_show_images(user_query):
-             # We can re-use the search tool logic or parse the response
-             pass
-             # For now, let's do a targeted search just for images to ensure the UI gets them
-             # This is a bit redundant but ensures the frontend contract is met
-             images = self._get_product_images(user_query, db)
+        messages = result['messages']
+        
+        # Look for the most recent search_products tool output
+        # We iterate backwards to find the relevant products discussed
+        for msg in reversed(messages):
+            if hasattr(msg, 'name') and msg.name == 'search_products':
+                # Parse product info from tool output
+                # Output format: "- Name (ID: 1): $10. Desc... [Stock] Image: URL"
+                content = msg.content
+                # Regex to find all image URLs and details
+                # This simple regex captures the whole line or just extracts the URL
+                # Let's try to extract structured data if possible
+                
+                lines = content.split('\n')
+                for line in lines:
+                    if "Image:" in line:
+                        try:
+                            # Extract URL
+                            img_match = re.search(r'Image: (https?://[^\s]+)', line)
+                            if img_match:
+                                img_url = img_match.group(1)
+                                
+                                # Extract Name and Price for caption
+                                # "- Product Name (ID: 1): $19.99."
+                                name_match = re.search(r'- (.*?) \(ID:', line)
+                                name = name_match.group(1) if name_match else "Product"
+                                
+                                price_match = re.search(r'\$(\d+\.?\d*)', line)
+                                price = float(price_match.group(1)) if price_match else 0.0
+                                
+                                stock_match = re.search(r'\[(.*?)\]', line)
+                                stock_str = stock_match.group(1) if stock_match else ""
+                                stock = 0
+                                if "in stock" in stock_str:
+                                    stock_nums = re.findall(r'\d+', stock_str)
+                                    stock = int(stock_nums[0]) if stock_nums else 0
+
+                                images.append({
+                                    "product_name": name,
+                                    "price": price,
+                                    "image_url": img_url,
+                                    "stock": stock
+                                })
+                        except Exception as e:
+                            print(f"Error parsing product line: {e}")
+                
+                # If we found images from the most recent search, stop looking back
+                if images:
+                    break
+        
+        # Limit images to avoid spamming
+        images = images[:5]
 
         return {
             "text": response_text,
             "images": images
         }
+
+    def _parse_response_text(self, content) -> str:
+        """Helper to handle list or string content from LLM"""
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and 'text' in part:
+                    text_parts.append(part['text'])
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            return " ".join(text_parts)
+        return str(content)
 
     # --- HELPERS (Ported from original) ---
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.models.models import Order, Product, User, Message, OrderStatus
 from app.schemas.schemas import OrderStatusUpdate
-from app.services.google_drive import upload_to_drive
+
 
 router = APIRouter()
 
@@ -161,10 +161,15 @@ def get_admin_products(db: Session = Depends(get_db)):
 @router.post("/admin/upload")
 async def upload_image(file: UploadFile = File(...)):
     try:
+        from app.services.cloudinary_service import upload_to_cloudinary
         content = await file.read()
-        image_url = upload_to_drive(content, file.filename, file.content_type)
+        # Cloudinary uploader.upload can take a file-like object or bytes
+        # However, the cloudinary_service function expects bytes based on current implementation
+        # Or even better, we pass the bytes directly.
+        image_url = upload_to_cloudinary(content, file.filename)
         return {"imageUrl": image_url}
     except Exception as e:
+        print(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
