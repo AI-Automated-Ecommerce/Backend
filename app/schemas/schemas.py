@@ -89,6 +89,14 @@ class OrderStatusUpdate(BaseModel):
     status: str
 
 
+class PaymentReceiptUpload(BaseModel):
+    """Schema for payment receipt upload response."""
+    order_id: int
+    receipt_url: str
+    status: str
+    message: str
+
+
 class BusinessSettingsBase(BaseModel):
     business_name: str | None = None
     contact_email: str | None = None
@@ -110,3 +118,21 @@ class BusinessSettingsResponse(BusinessSettingsBase):
     class Config:
         from_attributes = True
 
+
+class BusinessDetailBase(BaseModel):
+    title: str
+    content: str
+
+class BusinessDetailCreate(BusinessDetailBase):
+    pass
+
+class BusinessDetailUpdate(BaseModel):
+    title: str | None = None
+    content: str | None = None
+
+class BusinessDetailResponse(BusinessDetailBase):
+    id: int
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.database import get_db
-from app.models.models import Order, OrderItem, User, Product
-from app.schemas.schemas import OrderCreate, PlaceOrderRequest, PlaceOrderResponse
+from app.models.models import Order, OrderItem, User, Product, OrderStatus
+from app.schemas.schemas import OrderCreate, PlaceOrderRequest, PlaceOrderResponse, PaymentReceiptUpload
+from app.services.google_drive import upload_to_drive
 
 router = APIRouter()
 
@@ -221,3 +222,77 @@ def create_draft_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         "total": total,
         "checkout_url": checkout_url
     }
+
+
+@router.post("/orders/{order_id}/payment-receipt", response_model=PaymentReceiptUpload)
+async def upload_payment_receipt(
+    order_id: int, 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db)
+):
+    """
+    Upload payment receipt for an order.
+    
+    This endpoint:
+    - Accepts image uploads for payment proof
+    - Uploads to Google Drive for storage
+    - Updates order status to PAYMENT_REVIEW_REQUESTED
+    - Stores receipt URL in the order record
+    
+    Args:
+        order_id: ID of the order
+        file: Payment receipt image file
+        db: Database session
+        
+    Returns:
+        PaymentReceiptUpload with order ID, receipt URL, status, and message
+        
+    Raises:
+        HTTPException 404: Order not found
+        HTTPException 400: Invalid file or upload error
+        HTTPException 500: Database or unexpected errors
+    """
+    try:
+        # Validate order exists
+        order = db.query(Order).filter(Order.id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+        
+        # Validate file type (accept common image formats)
+        allowed_types = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid file type. Allowed: {', '.join(allowed_types)}"
+            )
+        
+        # Read file content
+        content = await file.read()
+        
+        # Upload to Google Drive
+        receipt_url = upload_to_drive(content, file.filename, file.content_type)
+        
+        # Update order with receipt URL and status
+        order.paymentReceiptUrl = receipt_url
+        order.status = OrderStatus.PAYMENT_REVIEW_REQUESTED
+        
+        db.commit()
+        db.refresh(order)
+        
+        return PaymentReceiptUpload(
+            order_id=order.id,
+            receipt_url=receipt_url,
+            status="PAYMENT_REVIEW_REQUESTED",
+            message=f"Payment receipt uploaded successfully. Order status updated to payment review."
+        )
+        
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload payment receipt: {str(e)}"
+        )
+

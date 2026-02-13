@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base
-from app.api.endpoints import products, orders, admin, chat, whatsapp, settings
+from app.api.endpoints import products, orders, admin, chat, whatsapp, settings, business_details
 from scripts.seed import seed_data
 
 # Create tables (ensure DB matches models)
@@ -81,3 +81,4 @@ app.include_router(admin.router, tags=["Admin"])
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(whatsapp.router, tags=["WhatsApp"])
 app.include_router(settings.router, tags=["Settings"])
+app.include_router(business_details.router, prefix="/api/business", tags=["Business Details"])
