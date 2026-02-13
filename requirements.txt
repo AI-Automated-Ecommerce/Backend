@@ -55,6 +55,3 @@ websockets==15.0.1
 langgraph
 langchain
 langchain-google-genai
-langgraph
-langchain
-langchain-google-genai
