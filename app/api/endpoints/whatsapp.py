@@ -1,11 +1,10 @@
 import os
 import requests
-import time
-import random
 from fastapi import APIRouter, Depends, Request, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.ai_agent import agent
+from app.services.chat_history import add_message, clear_chat_history
 
 router = APIRouter()
 
@@ -59,6 +58,17 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, 
             user_message = msg_body["text"]["body"]
             print(f"User said: {user_message}")
             
+            # Check for special commands
+            if user_message.strip().lower() == "/clear":
+                clear_chat_history(db, from_number)
+                send_reply(from_number, "Conversaton history cleared.")
+                # Also need to clear agent memory for this user
+                agent.clear_history(from_number) 
+                return {"status": "processed", "command": "clear"}
+
+            # Save user message to database
+            add_message(db, from_number, "user", user_message)
+            
             # Process in background to avoid webhook timeout and implement human-like delay
             background_tasks.add_task(handle_whatsapp_response, from_number, user_message, db)
         
@@ -71,7 +81,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, 
 
 def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
     """
-    Background task to process AI response, add random delay, and send message.
+    Background task to process AI response and send message immediately.
     """
     try:
         # 1. Generate AI response (do this first)
@@ -79,12 +89,7 @@ def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
         ai_response = response_data["text"]
         images = response_data.get("images", [])
         
-        # 2. Calculate random human-like delay (5 to 60 seconds)
-        delay_seconds = random.randint(5, 10)
-        print(f"Human-like delay: {delay_seconds}s for {from_number}")
-        
-        # 3. Wait for the delay
-        time.sleep(delay_seconds)
+        # 2. No delay - send immediately
         
         # 4. Send product images first (if any)
         if images:
@@ -96,9 +101,7 @@ def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
                     caption += " (Out of stock)"
                 
                 send_image(from_number, img_data['image_url'], caption)
-                time.sleep(1) # Small gap between images
-            
-            time.sleep(1) # Gap between images and final text
+                # Send immediately - no delay between images
         
         # 5. Send final text reply (simulate human typing by splitting sentences)
         import re
@@ -108,13 +111,12 @@ def handle_whatsapp_response(from_number: str, user_message: str, db: Session):
         
         for sentence in sentences:
             if sentence.strip():
-                # Simulate typing time: ~0.1s per character, min 1s, max 5s
-                typing_time = min(max(len(sentence) * 0.1, 1), 5)
-                time.sleep(typing_time)
-                
+                # Send immediately - no typing delay
                 send_reply(from_number, sentence.strip())
-                
-        print(f"Successfully processed and sent response after {delay_seconds}s delay")
+                # Save AI response to database
+                add_message(db, from_number, "assistant", sentence.strip())
+        
+        print(f"Successfully processed and sent response immediately")
 
     except Exception as e:
         print(f"Error processing background response: {e}")
