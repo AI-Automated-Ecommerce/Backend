@@ -75,3 +75,54 @@ def search_products(query: str, category_filter: str = None) -> str:
         return result
     finally:
         db.close()
+
+@tool
+def get_product_images(product_name_or_id: str) -> str:
+    """
+    Get the image and details of a SPECIFIC product.
+    Use this tool when the user asks to see a specific product (e.g. "show me the red one", "what does the first one look like?").
+    
+    Args:
+        product_name_or_id: The name or ID of the product to find.
+    
+    Returns:
+        String with product details and image URL.
+    """
+    print(f"DEBUG: TOOL get_product_images called with product_name_or_id='{product_name_or_id}'")
+    from app.core.database import SessionLocal
+    from app.models.models import Product
+    
+    db = SessionLocal()
+    try:
+        # Try finding by ID first if it looks like an ID
+        product = None
+        if product_name_or_id.isdigit():
+            product = db.query(Product).filter(Product.id == int(product_name_or_id)).first()
+            
+        # If not found by ID, search by name
+        if not product:
+            # Simple case-insensitive search
+            products = db.query(Product).filter(Product.isActive == True).all()
+            # 1. Exact match
+            for p in products:
+                if p.name.lower() == product_name_or_id.lower():
+                    product = p
+                    break
+            
+            # 2. Fuzzy match / Partial containing match
+            if not product:
+                for p in products:
+                    if product_name_or_id.lower() in p.name.lower():
+                        product = p
+                        break
+        
+        if product:
+            stock_status = f"{product.stockQuantity} in stock" if product.stockQuantity > 0 else "Out of stock"
+            result = f"Found product:\n- {product.name} (ID: {product.id}): ${product.price}. {product.description or ''} [{stock_status}] Image: {product.imageUrl}"
+        else:
+            result = f"Could not find a specific product matching '{product_name_or_id}'."
+            
+        print(f"DEBUG: TOOL get_product_images returning: {result}")
+        return result
+    finally:
+        db.close()
