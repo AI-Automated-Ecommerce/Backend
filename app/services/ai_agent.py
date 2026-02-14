@@ -16,6 +16,7 @@ from langgraph.graph.message import add_messages
 # Import tools from the tools module
 from app.services.tools import (
     search_products,
+    get_product_images,
     get_business_info,
     get_payment_details,
     add_to_cart,
@@ -53,7 +54,7 @@ class AIAgent:
         )
 
         # Initialize tools
-        self.tools = [search_products, get_business_info, add_to_cart, view_cart, generate_invoice, get_payment_details, get_business_details_tool, confirm_user_payment]
+        self.tools = [search_products, get_product_images, get_business_info, add_to_cart, view_cart, generate_invoice, get_payment_details, get_business_details_tool, confirm_user_payment]
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 
         # Build the graph
@@ -174,55 +175,57 @@ class AIAgent:
         
         # Extract images from tool outputs in the conversation
         images = []
-        messages = result['messages']
         
-        # Look for the most recent search_products tool output
-        # We iterate backwards to find the relevant products discussed
-        for msg in reversed(messages):
-            if hasattr(msg, 'name') and msg.name == 'search_products':
-                # Parse product info from tool output
-                # Output format: "- Name (ID: 1): $10. Desc... [Stock] Image: URL"
-                content = msg.content
-                # Regex to find all image URLs and details
-                # This simple regex captures the whole line or just extracts the URL
-                # Let's try to extract structured data if possible
-                
-                lines = content.split('\n')
-                for line in lines:
-                    if "Image:" in line:
-                        try:
-                            # Extract URL
-                            img_match = re.search(r'Image: (https?://[^\s]+)', line)
-                            if img_match:
-                                img_url = img_match.group(1)
-                                
-                                # Extract Name and Price for caption
-                                # "- Product Name (ID: 1): $19.99."
-                                name_match = re.search(r'- (.*?) \(ID:', line)
-                                name = name_match.group(1) if name_match else "Product"
-                                
-                                price_match = re.search(r'\$(\d+\.?\d*)', line)
-                                price = float(price_match.group(1)) if price_match else 0.0
-                                
-                                stock_match = re.search(r'\[(.*?)\]', line)
-                                stock_str = stock_match.group(1) if stock_match else ""
-                                stock = 0
-                                if "in stock" in stock_str:
-                                    stock_nums = re.findall(r'\d+', stock_str)
-                                    stock = int(stock_nums[0]) if stock_nums else 0
-
-                                images.append({
-                                    "product_name": name,
-                                    "price": price,
-                                    "image_url": img_url,
-                                    "stock": stock
-                                })
-                        except Exception as e:
-                            print(f"Error parsing product line: {e}")
-                
-                # If we found images from the most recent search, stop looking back
-                if images:
+        messages = result['messages']
+        # Only process images if the user explicitly asked for them
+        if self._should_show_images(user_query):
+            
+            # Iterate backwards through messages to find tool outputs in the CURRENT turn
+            # We stop when we hit the HumanMessage that started this turn.
+            for msg in reversed(messages):
+                if isinstance(msg, HumanMessage):
                     break
+                    
+                if hasattr(msg, 'name') and msg.name in ['search_products', 'get_product_images']:
+                    # Parse product info from tool output
+                    # Output format: "- Name (ID: 1): $10. Desc... [Stock] Image: URL"
+                    content = msg.content
+                    
+                    lines = content.split('\n')
+                    for line in lines:
+                        if "Image:" in line:
+                            try:
+                                # Extract URL
+                                img_match = re.search(r'Image: (https?://[^\s]+)', line)
+                                if img_match:
+                                    img_url = img_match.group(1)
+                                    
+                                    # Extract Name and Price for caption
+                                    # "- Product Name (ID: 1): $19.99."
+                                    name_match = re.search(r'- (.*?) \(ID:', line)
+                                    name = name_match.group(1) if name_match else "Product"
+                                    
+                                    price_match = re.search(r'\$(\d+\.?\d*)', line)
+                                    price = float(price_match.group(1)) if price_match else 0.0
+                                    
+                                    stock_match = re.search(r'\[(.*?)\]', line)
+                                    stock_str = stock_match.group(1) if stock_match else ""
+                                    stock = 0
+                                    if "in stock" in stock_str:
+                                        stock_nums = re.findall(r'\d+', stock_str)
+                                        stock = int(stock_nums[0]) if stock_nums else 0
+
+                                    images.append({
+                                        "product_name": name,
+                                        "price": price,
+                                        "image_url": img_url,
+                                        "stock": stock
+                                    })
+                            except Exception as e:
+                                print(f"Error parsing product line: {e}")
+                    
+                    # If we found images from a tool call in this turn, we can stop for that tool
+                    # (Though technically multiple tools could be called, usually one suffices)
         
         # Limit images to avoid spamming
         images = images[:5]
@@ -255,6 +258,7 @@ class AIAgent:
         
         You have access to tools to search for products and get business contact information.
         ALWAYS use the 'search_products' tool when potential customers ask about products, prices, or availability.
+        If the user asks to see a SPECIFIC product image or details (e.g. "show me the red one", "how does that look?"), use the 'get_product_images' tool with the specific product name or ID.
         ALWAYS use the 'get_business_info' tool when asked for contact details, address, or email.
         
         If the user wants to buy something, guide them to provide necessary details (Name, Address, Phone).
